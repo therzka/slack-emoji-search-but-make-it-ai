@@ -2,6 +2,11 @@
 
 A Raycast extension that semantically searches a local Slack emoji collection using AI. Describe a feeling, phrase, or concept, and let AI find the most relevant emojis for you!
 
+
+<img width="400" alt="image" src="https://github.com/user-attachments/assets/0c1bc319-743a-43ee-b689-dcee4aa6fd24" /> <img width="400" alt="image" src="https://github.com/user-attachments/assets/bb3f9b90-e467-47a9-8857-787c37ea41dc" />
+
+
+
 ## Prerequisites
 
 - A local directory of Slack emojis with the expected structure (see below)
