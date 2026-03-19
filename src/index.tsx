@@ -15,7 +15,7 @@ import { runGitPull } from "./utils/runGitPull";
 import { AliasList } from "./components/AliasList";
 
 export default function Command() {
-  const { emojiDirectory, githubToken } =
+  const { emojiDirectory, githubToken, ignoreList } =
     getPreferenceValues<Preferences.Index>();
   const [emojis, setEmojis] = useState<emojiItem[]>([]);
   const [searchText, setSearchText] = useState("");
@@ -49,7 +49,13 @@ export default function Command() {
     }
 
     setIsLoading(true);
-    readEmojiDirectory(emojiDirectory, submittedSearchText)
+    const parsedIgnoreList = ignoreList
+      ? ignoreList
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+    readEmojiDirectory(emojiDirectory, submittedSearchText, parsedIgnoreList)
       .then((emojis) => {
         setEmojis(emojis);
         if (emojis.length === 0) {

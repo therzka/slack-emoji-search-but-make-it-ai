@@ -31,6 +31,14 @@
           "description": "PAT with models:read scope for AI-powered search via GitHub Models",
           "required": true,
           "type": "password"
+        },
+        {
+          "name": "ignoreList",
+          "title": "Ignore List",
+          "description": "Comma-separated list of emoji name prefixes to exclude from results (e.g. ofub, someprefix)",
+          "required": false,
+          "type": "textfield",
+          "default": ""
         }
       ]
     }

@@ -259,9 +259,40 @@ export function getRankedEmojiMatches(
 
 export function rankEmojiMatches(
   termMatches: EmojiTermMatches[],
-  options: { query: string; limit: number },
+  options: { query: string; limit: number; ignoreList?: string[] },
 ): string[] {
-  return getRankedEmojiMatches(termMatches, options.query)
-    .slice(0, options.limit)
-    .map((match) => match.name);
+  const ranked = getRankedEmojiMatches(termMatches, options.query);
+
+  const ignore = new Set(
+    (options.ignoreList ?? []).map((s) => s.toLowerCase().trim()),
+  );
+  const seenNormalized = new Set<string>();
+  const results: string[] = [];
+
+  for (const match of ranked) {
+    const name = match.name;
+
+    // Apply ignore list: skip if the name contains any ignored term as a word segment
+    if (ignore.size > 0) {
+      const normalized = name.toLowerCase().replace(/[_-]/g, "-");
+      const segments = normalized.split("-");
+      if (
+        [...ignore].some(
+          (term) => segments.includes(term) || normalized === term,
+        )
+      ) {
+        continue;
+      }
+    }
+
+    // Deduplicate hyphen/underscore variants — keep the first (highest-scored) one
+    const normalized = name.toLowerCase().replace(/[_-]/g, "");
+    if (seenNormalized.has(normalized)) continue;
+    seenNormalized.add(normalized);
+
+    results.push(name);
+    if (results.length >= options.limit) break;
+  }
+
+  return results;
 }

@@ -27,7 +27,13 @@ Search is triggered on Enter (not on every keystroke):
 
 1. **AI candidate generation** (`extractSearchTerms`): A single AI call generates 10–15 plausible emoji name fragments for the query (e.g. "i hate meetings" → `["no-meetings", "facepalm", "eye-roll", "calendar-fire", ...]`).
 2. **Local search** (Fuse.js + substring matching): Each candidate is searched against emoji names with substring scan (limit=5) and Fuse fuzzy search (limit=5, threshold=0.3).
-3. **Global ranking** (`src/ranking.ts`): All candidate matches are scored together, with a boost for emojis that share context tokens from the original query. Final cap is 20 results.
+3. **Global ranking** (`src/ranking.ts`): All candidate matches are scored together, with a boost for emojis that share context tokens from the original query. Results are deduplicated (hyphen/underscore variants kept as one), filtered against the user's ignore list, and capped at 20.
+
+### Preferences
+
+- `emojiDirectory` — path to the local emoji directory
+- `githubToken` — GitHub PAT with `models:read` scope
+- `ignoreList` — optional comma-separated word segments to exclude (e.g. `ofub, shit`). Filtering is segment-based: splits emoji names on `-`/`_` and excludes any name containing a matching segment.
 
 ### UI (index.tsx)
 

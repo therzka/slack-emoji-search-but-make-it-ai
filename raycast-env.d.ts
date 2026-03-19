@@ -18,7 +18,9 @@ declare namespace Preferences {
   /** Emoji Directory - Path to local emoji directory containing emojis/emojis.json and emojis/aliases.json */
   "emojiDirectory": string,
   /** GitHub Personal Access Token - PAT with models:read scope for AI-powered search via GitHub Models */
-  "githubToken": string
+  "githubToken": string,
+  /** Ignore List - Comma-separated list of emoji name prefixes to exclude from results (e.g. ofub, someprefix) */
+  "ignoreList": string
 }
 }
 

@@ -120,16 +120,19 @@ Think about:
 - Object/literal emojis (taco, coffee, rocket, etc.)
 - Character/meme emojis (picard, bufo, elmo, doge, etc.)
 - Compound names with hyphens (slow-clap, mic-drop, chef-kiss, etc.)
+- Internet culture, slang, and meme language — translate colloquial phrases to their cultural equivalents (e.g. "throw out" → yeet, "agree" → this, "do it" → just-do-it, "no problem" → no-sweat, "very fast" → zoom or speedrun, "drunk" → wasted, "chaotic" → shrug or anarchy)
 
 Rules:
 - Prefer reusable reaction concepts over person-specific names or usernames
 - Avoid likely usernames, employee names, or custom proper nouns unless the user explicitly asked for that person or name
 - When the phrase already has a strong reaction idiom (like "holy moly"), prefer that phrase and closely related reactions over generic single words
+- Think about what someone would name a relevant emoji, not just the literal words in the query
 
 Return 10-15 emoji name fragments as a JSON array. These will be fuzzy-matched, so approximate names are fine.
 
 Examples:
 "are you kidding me?" → ["facepalm", "really", "bruh", "shocked", "disbelief", "eye-roll", "picard", "seriously", "sarcastic", "what"]
+"throw it out" → ["yeet", "trash", "garbage", "toss", "nope", "bye", "delete", "dumpster"]
 "I love tacos" → ["taco", "love", "heart", "sparkle", "star"]
 "good morning" → ["morning", "sunrise", "sun", "wave", "coffee"]
 "holy moly" → ["holy-moly", "whoa", "wow", "omg", "gasp", "mind-blown", "shocked", "astonished", "hallelujah"]
@@ -185,6 +188,7 @@ function substringMatchEmojis(
 export const readEmojiDirectory = async (
   directoryPath: string,
   aiSearchTerm: string,
+  ignoreList: string[] = [],
 ): Promise<emojiItem[]> => {
   if (aiSearchTerm.trim() === "") return [];
 
@@ -235,6 +239,7 @@ export const readEmojiDirectory = async (
   const finalNames = rankEmojiMatches(termMatches, {
     query: aiSearchTerm,
     limit: 20,
+    ignoreList,
   }).filter((name) => name in emojisData);
 
   console.log(`[search] Final: ${finalNames.length} emojis returned`);

@@ -3,7 +3,16 @@
 A Raycast extension that semantically searches a local Slack emoji collection using AI. Describe a feeling, phrase, or concept, and let AI find the most relevant emojis for you!
 
 
-<img width="400" alt="image" src="https://github.com/user-attachments/assets/0c1bc319-743a-43ee-b689-dcee4aa6fd24" /> <img width="400" alt="image" src="https://github.com/user-attachments/assets/bb3f9b90-e467-47a9-8857-787c37ea41dc" />
+<details><summary>Screenshots</summary>
+
+<img width="500" alt="image" src="https://github.com/user-attachments/assets/0c1bc319-743a-43ee-b689-dcee4aa6fd24" /> 
+<img width="500" alt="image" src="https://github.com/user-attachments/assets/bb3f9b90-e467-47a9-8857-787c37ea41dc" />
+<img width="500" alt="image" src="https://github.com/user-attachments/assets/ff481ff3-434e-44ab-8de7-726e409ac057" />
+<img width="500" alt="image" src="https://github.com/user-attachments/assets/677d1be1-18f3-4036-8997-3e68f350b4eb" />
+
+
+</details>
+
 
 
 
@@ -34,6 +43,7 @@ your-emoji-directory/
 3. In extension preferences, set:
    - **Emoji Directory** — path to your emoji directory
    - **GitHub Personal Access Token** — your PAT with `models:read` scope
+   - **Ignore List** *(optional)* — comma-separated terms to exclude from results. Any emoji whose name contains a matching word segment is filtered out.
 
 ## Usage
 
@@ -43,13 +53,13 @@ Invoke the **Search Slack Emojis with AI** command in Raycast. Type a phrase or 
 
 | Shortcut | Action |
 |----------|--------|
-| **Enter** | Search emojis with AI |
-| **⌘ V** | Paste `:emoji_name:` into active app |
+| **Enter** | Search with AI |
+| **⌘ V** | Paste `:emoji_name:` into the active app |
 | **⌘ C** | Copy `:emoji_name:` to clipboard |
-| **⌘ ⇧ Enter** | Copy emoji image to clipboard |
-| **⌘ L** | Show aliases for selected emoji |
+| **⌘ ⇧ Enter** | Copy emoji image file to clipboard |
+| **⌘ L** | Show aliases for the selected emoji |
 | **⌘ ⇧ N** | Clear results and start a new search |
-| **⌘ U** | Update emoji repo (git pull) |
+| **⌘ U** | Pull latest changes from the emoji git repo |
 
 ## How It Works
 
