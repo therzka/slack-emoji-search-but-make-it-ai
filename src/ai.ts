@@ -1,7 +1,6 @@
 import { getPreferenceValues } from "@raycast/api";
 
 const GITHUB_MODELS_URL = "https://models.github.ai/inference/chat/completions";
-const MODEL = "openai/gpt-5-mini";
 
 interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -16,7 +15,11 @@ interface ChatCompletionResponse {
  * Sends a prompt to the GitHub Models API and returns the assistant's response text.
  */
 export async function askAI(prompt: string, system?: string): Promise<string> {
-  const { githubToken } = getPreferenceValues<{ githubToken: string }>();
+  const { githubToken, aiModel } = getPreferenceValues<{
+    githubToken: string;
+    aiModel: string;
+  }>();
+  const model = aiModel || "openai/gpt-5-mini";
 
   const messages: ChatMessage[] = [];
   if (system) {
@@ -30,7 +33,7 @@ export async function askAI(prompt: string, system?: string): Promise<string> {
       Authorization: `Bearer ${githubToken}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ model: MODEL, messages }),
+    body: JSON.stringify({ model, messages }),
   });
 
   if (!response.ok) {

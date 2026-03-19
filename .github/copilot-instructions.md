@@ -33,7 +33,8 @@ Search is triggered on Enter (not on every keystroke):
 
 - `emojiDirectory` — path to the local emoji directory
 - `githubToken` — GitHub PAT with `models:read` scope
-- `ignoreList` — optional comma-separated word segments to exclude (e.g. `ofub, shit`). Filtering is segment-based: splits emoji names on `-`/`_` and excludes any name containing a matching segment.
+- `aiModel` — dropdown of curated GitHub Models options, defaults to `openai/gpt-5-mini`
+- `ignoreList` — optional comma-separated word segments to exclude. Filtering is segment-based: splits emoji names on `-`/`_` and excludes any name containing a matching segment.
 
 ### UI (index.tsx)
 

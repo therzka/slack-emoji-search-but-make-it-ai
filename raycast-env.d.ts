@@ -20,7 +20,9 @@ declare namespace Preferences {
   /** GitHub Personal Access Token - PAT with models:read scope for AI-powered search via GitHub Models */
   "githubToken": string,
   /** Ignore List - Comma-separated list of emoji name prefixes to exclude from results (e.g. ofub, someprefix) */
-  "ignoreList": string
+  "ignoreList": string,
+  /** AI Model - GitHub Models model to use for emoji candidate generation */
+  "aiModel": "openai/gpt-5-mini" | "openai/gpt-4.1" | "openai/gpt-4.1-mini" | "openai/gpt-4o" | "openai/gpt-4o-mini"
 }
 }
 

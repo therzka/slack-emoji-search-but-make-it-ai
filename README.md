@@ -43,6 +43,7 @@ your-emoji-directory/
 3. In extension preferences, set:
    - **Emoji Directory** — path to your emoji directory
    - **GitHub Personal Access Token** — your PAT with `models:read` scope
+   - **AI Model** *(optional)* — which GitHub Models model to use. Defaults to GPT-5 mini; switch to GPT-4.1 for more accurate results
    - **Ignore List** *(optional)* — comma-separated terms to exclude from results. Any emoji whose name contains a matching word segment is filtered out.
 
 ## Usage

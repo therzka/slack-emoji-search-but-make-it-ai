@@ -5,7 +5,6 @@
   "description": "Semantically search a local Slack emoji collection using AI and copy the name to your clipboard.",
   "icon": "bufo-offers-you-the-best-emoji-culture-ever.png",
   "author": "thz",
-  "owner": "github",
   "categories": [
     "Fun",
     "Productivity"
@@ -39,6 +38,21 @@
           "required": false,
           "type": "textfield",
           "default": ""
+        },
+        {
+          "name": "aiModel",
+          "title": "AI Model",
+          "description": "GitHub Models model to use for emoji candidate generation",
+          "required": false,
+          "type": "dropdown",
+          "default": "openai/gpt-5-mini",
+          "data": [
+            { "title": "GPT-5 mini — Fast (default)", "value": "openai/gpt-5-mini" },
+            { "title": "GPT-4.1 — More accurate", "value": "openai/gpt-4.1" },
+            { "title": "GPT-4.1 mini — Balanced", "value": "openai/gpt-4.1-mini" },
+            { "title": "GPT-4o — Strong general purpose", "value": "openai/gpt-4o" },
+            { "title": "GPT-4o mini — Fast GPT-4o", "value": "openai/gpt-4o-mini" }
+          ]
         }
       ]
     }
