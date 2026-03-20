@@ -212,13 +212,23 @@ export const readEmojiDirectory = async (
   // AI-generated emoji name candidates
   const candidates = await extractSearchTerms(aiSearchTerm);
 
+  // Prepend literal query words so exact/acronym matches always appear
+  const queryWords = aiSearchTerm
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w.length > 1);
+  const allTerms = [
+    ...queryWords,
+    ...candidates.filter((c) => !queryWords.includes(c.toLowerCase())),
+  ];
+
   console.log("[search] Query:", JSON.stringify(aiSearchTerm));
-  console.log("[search] Search terms:", candidates);
+  console.log("[search] Search terms:", allTerms);
 
   const termMatches: EmojiTermMatches[] = [];
 
-  // Search all AI candidates with substring + Fuse
-  for (const term of candidates) {
+  // Search all candidates with substring + Fuse
+  for (const term of allTerms) {
     const substrMatches = substringMatchEmojis(term, allEmojiNames, 5);
     const fuseResults = fuse.search(term, { limit: 5 });
     const fuseNames = fuseResults.map((r) => r.item.canonicalName);
@@ -325,8 +335,22 @@ export async function searchEmojisStream(
   };
 
   try {
+    // Always search the literal query first — essential for acronyms and exact names
+    const queryWords = aiSearchTerm
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((w) => w.length > 1);
+    for (const word of queryWords) {
+      processTerm(word);
+    }
+
     console.log(`[search:stream] starting AI stream... (${Date.now() - t0}ms)`);
-    await streamAI(aiSearchTerm, EXTRACTION_SYSTEM_PROMPT, processTerm);
+    await streamAI(aiSearchTerm, EXTRACTION_SYSTEM_PROMPT, (term) => {
+      // Skip AI terms we already searched as literal words
+      if (!queryWords.includes(term)) {
+        processTerm(term);
+      }
+    });
     console.log(
       `[search:stream] DONE total=${Date.now() - t0}ms terms=${termMatches.length}`,
     );
