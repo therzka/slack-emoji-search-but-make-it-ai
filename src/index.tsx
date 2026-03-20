@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Grid,
   ActionPanel,
@@ -12,12 +12,13 @@ import {
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { emojiItem, EmojiSource, readEmojiDirectory, clearEmojiCache } from "./utils";
+import { emojiItem, EmojiSource, searchEmojisStream, clearEmojiCache } from "./utils";
+import { warmUpLocalLLM } from "./ai";
 import { runGitPull } from "./utils/runGitPull";
 import { AliasList } from "./components/AliasList";
 
 export default function Command() {
-  const { emojiSource, emojiDirectory, githubEmojiRepo, githubEmojiBranch, githubToken, ignoreList } =
+  const { emojiSource, emojiDirectory, githubEmojiRepo, githubEmojiBranch, githubToken, ignoreList, aiProvider, localEndpoint, localModel } =
     getPreferenceValues<Preferences.Index>();
 
   const repoParts = (githubEmojiRepo ?? "").split("/");
@@ -35,6 +36,8 @@ export default function Command() {
   const [isLoading, setIsLoading] = useState(false);
   const [submittedSearchText, setSubmittedSearchText] = useState("");
   const [searchCounter, setSearchCounter] = useState(0);
+  const searchIdRef = useRef(0);
+  const hasWarmedUpRef = useRef(false);
 
   useEffect(() => {
     if (emojiSource === "github") {
@@ -58,15 +61,39 @@ export default function Command() {
         return;
       }
     }
-    if (!githubToken) {
-      showToast(
-        Toast.Style.Failure,
-        "GitHub token not set",
-        "Add a GitHub PAT with models:read scope in extension preferences.",
-      );
-      return;
+    if ((aiProvider || "github") === "local") {
+      if (!localEndpoint) {
+        showToast(
+          Toast.Style.Failure,
+          "Local LLM endpoint not set",
+          "Add a local LLM endpoint URL in extension preferences.",
+        );
+        return;
+      }
+      if (!localModel) {
+        showToast(
+          Toast.Style.Failure,
+          "Local LLM model not set",
+          "Add a local model name in extension preferences.",
+        );
+        return;
+      }
+    } else {
+      if (!githubToken) {
+        showToast(
+          Toast.Style.Failure,
+          "GitHub token not set",
+          "Add a GitHub PAT with models:read scope in extension preferences.",
+        );
+        return;
+      }
     }
-  }, [emojiSource, emojiDirectory, githubEmojiRepo, githubEmojiBranch, githubToken]);
+    // Pre-warm local LLM once on mount so the model is loaded before the first search
+    if (!hasWarmedUpRef.current && (aiProvider || "github") === "local") {
+      hasWarmedUpRef.current = true;
+      warmUpLocalLLM();
+    }
+  }, [emojiSource, emojiDirectory, githubEmojiRepo, githubEmojiBranch, githubToken, aiProvider, localEndpoint, localModel]);
 
   useEffect(() => {
     if (submittedSearchText.trim() === "") {
@@ -75,24 +102,38 @@ export default function Command() {
     }
 
     setIsLoading(true);
+    setEmojis([]);
+    const searchId = ++searchIdRef.current;
     const parsedIgnoreList = ignoreList
       ? ignoreList
           .split(",")
           .map((s) => s.trim())
           .filter(Boolean)
       : [];
-    readEmojiDirectory(source, submittedSearchText, parsedIgnoreList)
-      .then((emojis) => {
+    let lastEmojis: emojiItem[] = [];
+    searchEmojisStream(
+      source,
+      submittedSearchText,
+      parsedIgnoreList,
+      (emojis) => {
+        if (searchId !== searchIdRef.current) return;
+        lastEmojis = emojis;
         setEmojis(emojis);
-        if (emojis.length === 0) {
+      },
+    )
+      .then(() => {
+        if (searchId !== searchIdRef.current) return;
+        if (lastEmojis.length === 0) {
           showToast(Toast.Style.Animated, "No emojis found for your query.");
         }
       })
       .catch((err) => {
+        if (searchId !== searchIdRef.current) return;
         showToast(Toast.Style.Failure, "Could not load emojis", err.message);
         setEmojis([]);
       })
       .finally(() => {
+        if (searchId !== searchIdRef.current) return;
         setIsLoading(false);
       });
   }, [emojiSource, emojiDirectory, githubEmojiRepo, githubEmojiBranch, submittedSearchText, searchCounter]);

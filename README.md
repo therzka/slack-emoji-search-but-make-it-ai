@@ -1,7 +1,6 @@
 # Slack Emoji AI Search
 
-A Raycast extension that semantically searches a local Slack emoji collection using AI. Describe a feeling, phrase, or concept, and let AI find the most relevant emojis for you!
-
+A [Raycast](https://raycast.com) extension that semantically searches a local Slack emoji collection using AI. Describe a feeling, phrase, or concept, and let AI find the most relevant emojis for you.
 
 <details><summary>Screenshots</summary>
 
@@ -10,16 +9,15 @@ A Raycast extension that semantically searches a local Slack emoji collection us
 <img width="500" alt="image" src="https://github.com/user-attachments/assets/ff481ff3-434e-44ab-8de7-726e409ac057" />
 <img width="500" alt="image" src="https://github.com/user-attachments/assets/677d1be1-18f3-4036-8997-3e68f350b4eb" />
 
-
 </details>
-
-
-
 
 ## Prerequisites
 
+- [Raycast](https://raycast.com) installed
 - A local directory of Slack emojis with the expected structure (see below)
-- A GitHub Personal Access Token (PAT) with the `models:read` scope — [create one here](https://github.com/settings/tokens)
+- **One of:**
+  - A GitHub Personal Access Token (PAT) with the `models:read` scope — [create one here](https://github.com/settings/tokens)
+  - A local LLM server (e.g. [Ollama](https://ollama.com)) with a small model installed (see [Recommended Local Models](#recommended-local-models))
 
 ### Expected Emoji Directory Structure
 
@@ -42,13 +40,16 @@ your-emoji-directory/
 2. Install and open this extension in Raycast
 3. In extension preferences, set:
    - **Emoji Directory** — path to your emoji directory
-   - **GitHub Personal Access Token** — your PAT with `models:read` scope
-   - **AI Model** *(optional)* — which GitHub Models model to use. Defaults to GPT-5 mini; switch to GPT-4.1 for more accurate results
-   - **Ignore List** *(optional)* — comma-separated terms to exclude from results. Any emoji whose name contains a matching word segment is filtered out.
+   - **AI Provider** — GitHub Models (cloud) or Local LLM
+   - For **GitHub Models**: set your GitHub PAT and optionally choose a model (defaults to GPT-5 mini)
+   - For **Local LLM**: set the endpoint URL and model name (see [Recommended Local Models](#recommended-local-models))
+   - **Ignore List** *(optional)* — comma-separated terms to filter out of results (any emoji whose name contains a matching segment is excluded)
 
 ## Usage
 
-Invoke the **Search Slack Emojis with AI** command in Raycast. Type a phrase or describe a feeling (e.g., "celebrating a win", "i hate meetings", "holy moly") and press **Enter** to search.
+Open the **Search Slack Emojis with AI** command in Raycast. Type a phrase or describe a feeling and press **Enter** to search. Results stream in progressively as the AI generates candidates.
+
+**Example queries:** "celebrating a win", "i hate meetings", "holy moly", "lgtm", "ship it"
 
 ### Keyboard Shortcuts
 
@@ -64,11 +65,41 @@ Invoke the **Search Slack Emojis with AI** command in Raycast. Type a phrase or 
 
 ## How It Works
 
-The extension uses an AI search pipeline powered by [GitHub Models](https://github.com/marketplace/models):
+The extension uses a two-stage AI search pipeline:
 
-1. **AI candidate generation** — AI analyzes your query and generates 10–15 plausible emoji name fragments (e.g., "i hate meetings" → `["no-meetings", "facepalm", "eye-roll", "calendar-fire", "frustrated", ...]`)
-2. **Local search** — Each candidate is searched against your emoji collection using both substring matching and fuzzy search (Fuse.js)
-3. **Ranked results** — Matches are ranked globally across all candidates, with a boost for emojis that share context words with your original query
+1. **Literal + AI candidate generation** — Your query words are searched directly (important for acronyms like "lgtm"), then AI generates 10–15 additional plausible emoji name fragments (e.g., "i hate meetings" → `["facepalm", "eye-roll", "calendar-fire", "frustrated", ...]`)
+2. **Local search** — Each candidate is matched against your emoji collection using both substring matching and fuzzy search ([Fuse.js](https://www.fusejs.io/))
+3. **Global ranking** — All matches are scored across candidates, with a boost for emojis that share words with your original query
+
+Results stream in progressively — you'll see matches appear as the AI generates each term, rather than waiting for all candidates.
+
+Supports both [GitHub Models](https://github.com/marketplace/models) (cloud) and local OpenAI-compatible LLM servers (Ollama, LM Studio, etc.).
+
+## Recommended Local Models
+
+The AI task here is simple — generating a short list of emoji name guesses — so **small, fast models (1-4B) work great**. You don't need a large model.
+
+| Model | Ollama command | Size | Notes |
+|---|---|---|---|
+| **Llama 3.2 3B** ⭐ | `ollama pull llama3.2:3b` | ~2 GB | Best speed/quality balance. Recommended starting point. |
+| **Phi-4 Mini** | `ollama pull phi4-mini` | ~2.5 GB | Fastest option with great JSON reliability. |
+| **Qwen 3 4B** | `ollama pull qwen3:4b` | ~2.5 GB | Strong at structured output. May include `<think>` blocks (handled automatically). |
+| **Llama 3.2 1B** | `ollama pull llama3.2:1b` | ~1.3 GB | Ultra-fast but may miss cultural/slang emoji mappings. |
+
+### Local LLM Setup (Ollama)
+
+```sh
+# Install Ollama: https://ollama.com
+ollama pull llama3.2:3b    # download the recommended model
+ollama serve               # start the server (if not already running)
+```
+
+Then in extension preferences:
+- **AI Provider** → Local LLM
+- **Local LLM Endpoint** → `http://localhost:11434/v1/chat/completions`
+- **Local LLM Model** → `llama3.2:3b`
+
+> **Performance note:** The first search after opening the extension triggers model loading (~10-30s depending on model size and hardware). Subsequent searches are fast (~1s) since the model stays in memory for 30 minutes. Use `llama3.2:1b` for the fastest loading times.
 
 ## License
 
