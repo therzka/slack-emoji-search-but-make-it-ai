@@ -77,7 +77,7 @@
         {
           "name": "localModel",
           "title": "Local LLM Model",
-          "description": "Model name to use with your local LLM server (e.g. llama3.2, mistral, gemma2)",
+          "description": "Model name to use with your local LLM server (e.g. llama3.2:3b, phi4-mini, qwen3:4b)",
           "required": false,
           "type": "textfield",
           "default": ""

@@ -27,7 +27,7 @@ declare namespace Preferences {
   "aiModel": "openai/gpt-5-mini" | "openai/gpt-4.1" | "openai/gpt-4.1-mini" | "openai/gpt-4o" | "openai/gpt-4o-mini",
   /** Local LLM Endpoint - OpenAI-compatible chat completions URL for your local LLM (e.g. http://localhost:11434/v1/chat/completions) */
   "localEndpoint": string,
-  /** Local LLM Model - Model name to use with your local LLM server (e.g. llama3.2, mistral, gemma2) */
+  /** Local LLM Model - Model name to use with your local LLM server (e.g. llama3.2:3b, phi4-mini, qwen3:4b) */
   "localModel": string
 }
 }
