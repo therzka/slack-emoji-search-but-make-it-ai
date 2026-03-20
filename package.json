@@ -18,11 +18,39 @@
       "mode": "view",
       "preferences": [
         {
+          "name": "emojiSource",
+          "title": "Emoji Source",
+          "description": "Where to load emojis from — a local directory or a public GitHub repository",
+          "required": false,
+          "type": "dropdown",
+          "default": "local",
+          "data": [
+            { "title": "Local directory", "value": "local" },
+            { "title": "GitHub repository", "value": "github" }
+          ]
+        },
+        {
           "name": "emojiDirectory",
           "title": "Emoji Directory",
-          "description": "Path to local emoji directory containing emojis/emojis.json and emojis/aliases.json",
-          "required": true,
+          "description": "Path to local emoji directory containing emojis/emojis.json and emojis/aliases.json (required when Emoji Source is \"Local directory\")",
+          "required": false,
           "type": "directory"
+        },
+        {
+          "name": "githubEmojiRepo",
+          "title": "GitHub Emoji Repository",
+          "description": "Public GitHub repository with your emoji collection in owner/repo format, e.g. myorg/slack-emojis (required when Emoji Source is \"GitHub repository\")",
+          "required": false,
+          "type": "textfield",
+          "default": ""
+        },
+        {
+          "name": "githubEmojiBranch",
+          "title": "GitHub Emoji Branch",
+          "description": "Branch of the GitHub emoji repository to use (defaults to main)",
+          "required": false,
+          "type": "textfield",
+          "default": "main"
         },
         {
           "name": "githubToken",

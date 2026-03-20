@@ -15,8 +15,14 @@ declare type Preferences = ExtensionPreferences
 declare namespace Preferences {
   /** Preferences accessible in the `index` command */
   export type Index = ExtensionPreferences & {
+  /** Emoji Source - Where to load emojis from */
+  "emojiSource": "local" | "github",
   /** Emoji Directory - Path to local emoji directory containing emojis/emojis.json and emojis/aliases.json */
   "emojiDirectory": string,
+  /** GitHub Emoji Repository - Public GitHub repository with your emoji collection in owner/repo format */
+  "githubEmojiRepo": string,
+  /** GitHub Emoji Branch - Branch of the GitHub emoji repository to use */
+  "githubEmojiBranch": string,
   /** GitHub Personal Access Token - PAT with models:read scope for AI-powered search via GitHub Models */
   "githubToken": string,
   /** Ignore List - Comma-separated list of emoji name prefixes to exclude from results (e.g. ofub, someprefix) */
