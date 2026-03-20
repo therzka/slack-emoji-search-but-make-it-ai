@@ -32,7 +32,7 @@ export default function Command() {
       );
       return;
     }
-    if (aiProvider === "local") {
+    if ((aiProvider || "github") === "local") {
       if (!localEndpoint) {
         showToast(
           Toast.Style.Failure,

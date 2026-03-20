@@ -33,7 +33,7 @@ export async function askAI(prompt: string, system?: string): Promise<string> {
   }
   messages.push({ role: "user", content: prompt });
 
-  if (aiProvider === "local") {
+  if ((aiProvider || "github") === "local") {
     return callLocalLLM(localEndpoint, localModel, messages);
   }
 
