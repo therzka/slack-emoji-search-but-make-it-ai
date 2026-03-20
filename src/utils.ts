@@ -111,31 +111,14 @@ export function clearEmojiCache(): void {
   cachedFuse = null;
 }
 
-const EXTRACTION_SYSTEM_PROMPT = `You help find emojis in a large Slack custom emoji collection.
-Given a user's phrase, generate plausible emoji names that would be relevant.
+const EXTRACTION_SYSTEM_PROMPT = `Find emojis in a Slack custom emoji collection. Given a phrase, output 6-10 plausible emoji name fragments as a JSON array.
 
-Think about:
-- Reaction emojis (facepalm, thumbsup, fire, this-is-fine, etc.)
-- Emotion emojis (happy, sad, love, mind-blown, etc.)
-- Object/literal emojis (taco, coffee, rocket, etc.)
-- Character/meme emojis (picard, bufo, elmo, doge, etc.)
-- Compound names with hyphens (slow-clap, mic-drop, chef-kiss, etc.)
-- Internet culture, slang, and meme language — translate colloquial phrases to their cultural equivalents (e.g. "throw out" → yeet, "agree" → this, "do it" → just-do-it, "no problem" → no-sweat, "very fast" → zoom or speedrun, "drunk" → wasted, "chaotic" → shrug or anarchy)
+Think about: reactions (facepalm, slow-clap, this-is-fine), emotions (love, mind-blown), objects (taco, rocket), memes/characters (picard, doge, elmo), compound names (mic-drop, chef-kiss), and slang equivalents ("throw out"→yeet, "agree"→this, "drunk"→wasted).
 
-Rules:
-- Prefer reusable reaction concepts over person-specific names or usernames
-- Avoid likely usernames, employee names, or custom proper nouns unless the user explicitly asked for that person or name
-- When the phrase already has a strong reaction idiom (like "holy moly"), prefer that phrase and closely related reactions over generic single words
-- Think about what someone would name a relevant emoji, not just the literal words in the query
-
-Return 10-15 emoji name fragments as a JSON array. These will be fuzzy-matched, so approximate names are fine.
+Rules: prefer reaction concepts over person names; translate idioms to their cultural emoji equivalent; think about what someone would name the emoji, not just the literal words.
 
 Examples:
-"are you kidding me?" → ["facepalm", "really", "bruh", "shocked", "disbelief", "eye-roll", "picard", "seriously", "sarcastic", "what"]
-"throw it out" → ["yeet", "trash", "garbage", "toss", "nope", "bye", "delete", "dumpster"]
-"I love tacos" → ["taco", "love", "heart", "sparkle", "star"]
-"good morning" → ["morning", "sunrise", "sun", "wave", "coffee"]
-"holy moly" → ["holy-moly", "whoa", "wow", "omg", "gasp", "mind-blown", "shocked", "astonished", "hallelujah"]
+"are you kidding me?" → ["facepalm", "really", "bruh", "eye-roll", "picard", "seriously", "disbelief"]
 "ship it" → ["ship", "rocket", "deploy", "shipit", "lgtm", "launch"]
 
 Return ONLY a valid JSON array, no other text.`;

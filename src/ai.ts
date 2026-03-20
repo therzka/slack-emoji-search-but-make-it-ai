@@ -41,6 +41,34 @@ function resolveProvider(prefs: AIPreferences): {
 }
 
 /**
+ * Fires a minimal background request to the local LLM to force it to load into memory.
+ * Call this when the extension mounts so the model is warm before the user's first search.
+ * Errors are silently ignored — this is a best-effort optimization only.
+ */
+export async function warmUpLocalLLM(): Promise<void> {
+  const prefs = getPreferenceValues<AIPreferences>();
+  const { provider, url, model } = resolveProvider(prefs);
+  if (provider !== "local" || !url || !model || model === "(unset)") return;
+
+  try {
+    console.log("[ai] warming up local LLM...");
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: "hi" }],
+        max_tokens: 1,
+        stream: false,
+      }),
+    });
+    console.log(`[ai] warmup complete (status ${response.status})`);
+  } catch {
+    // Ignore warmup failures — the real search will surface any real errors
+  }
+}
+
+/**
  * Sends a prompt to the configured AI provider and returns the assistant's response text.
  * Supports GitHub Models (cloud) and local OpenAI-compatible LLM servers (e.g. Ollama, LM Studio).
  */

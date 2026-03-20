@@ -11,6 +11,7 @@ import {
 } from "@raycast/api";
 import fs from "fs";
 import { emojiItem, clearEmojiCache, searchEmojisStream } from "./utils";
+import { warmUpLocalLLM } from "./ai";
 import { runGitPull } from "./utils/runGitPull";
 import { AliasList } from "./components/AliasList";
 
@@ -29,6 +30,7 @@ export default function Command() {
   const [submittedSearchText, setSubmittedSearchText] = useState("");
   const [searchCounter, setSearchCounter] = useState(0);
   const searchIdRef = useRef(0);
+  const hasWarmedUpRef = useRef(false);
 
   useEffect(() => {
     if (!emojiDirectory || !fs.existsSync(emojiDirectory)) {
@@ -65,6 +67,12 @@ export default function Command() {
         );
         return;
       }
+    }
+
+    // Pre-warm local LLM once on mount so the model is loaded before the first search
+    if (!hasWarmedUpRef.current && (aiProvider || "github") === "local") {
+      hasWarmedUpRef.current = true;
+      warmUpLocalLLM();
     }
   }, [emojiDirectory, githubToken, aiProvider, localEndpoint, localModel]);
 
