@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Grid,
   ActionPanel,
@@ -10,18 +10,25 @@ import {
   Icon,
 } from "@raycast/api";
 import fs from "fs";
-import { emojiItem, readEmojiDirectory, clearEmojiCache } from "./utils";
+import { emojiItem, clearEmojiCache, searchEmojisStream } from "./utils";
 import { runGitPull } from "./utils/runGitPull";
 import { AliasList } from "./components/AliasList";
 
 export default function Command() {
-  const { emojiDirectory, githubToken, ignoreList, aiProvider, localEndpoint, localModel } =
-    getPreferenceValues<Preferences.Index>();
+  const {
+    emojiDirectory,
+    githubToken,
+    ignoreList,
+    aiProvider,
+    localEndpoint,
+    localModel,
+  } = getPreferenceValues<Preferences.Index>();
   const [emojis, setEmojis] = useState<emojiItem[]>([]);
   const [searchText, setSearchText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [submittedSearchText, setSubmittedSearchText] = useState("");
   const [searchCounter, setSearchCounter] = useState(0);
+  const searchIdRef = useRef(0);
 
   useEffect(() => {
     if (!emojiDirectory || !fs.existsSync(emojiDirectory)) {
@@ -68,24 +75,38 @@ export default function Command() {
     }
 
     setIsLoading(true);
+    setEmojis([]);
+    const searchId = ++searchIdRef.current;
     const parsedIgnoreList = ignoreList
       ? ignoreList
           .split(",")
           .map((s) => s.trim())
           .filter(Boolean)
       : [];
-    readEmojiDirectory(emojiDirectory, submittedSearchText, parsedIgnoreList)
-      .then((emojis) => {
+    let lastEmojis: emojiItem[] = [];
+    searchEmojisStream(
+      emojiDirectory,
+      submittedSearchText,
+      parsedIgnoreList,
+      (emojis) => {
+        if (searchId !== searchIdRef.current) return;
+        lastEmojis = emojis;
         setEmojis(emojis);
-        if (emojis.length === 0) {
+      },
+    )
+      .then(() => {
+        if (searchId !== searchIdRef.current) return;
+        if (lastEmojis.length === 0) {
           showToast(Toast.Style.Animated, "No emojis found for your query.");
         }
       })
       .catch((err) => {
+        if (searchId !== searchIdRef.current) return;
         showToast(Toast.Style.Failure, "Could not load emojis", err.message);
         setEmojis([]);
       })
       .finally(() => {
+        if (searchId !== searchIdRef.current) return;
         setIsLoading(false);
       });
   }, [emojiDirectory, submittedSearchText, searchCounter]);

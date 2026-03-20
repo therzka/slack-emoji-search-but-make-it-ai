@@ -20,7 +20,7 @@ declare namespace Preferences {
   /** AI Provider - Choose between GitHub Models (cloud) or a local LLM server (e.g. Ollama, LM Studio) */
   "aiProvider": "github" | "local",
   /** GitHub Personal Access Token - PAT with models:read scope for AI-powered search via GitHub Models (not needed for Local LLM) */
-  "githubToken": string,
+  "githubToken"?: string,
   /** Ignore List - Comma-separated list of emoji name prefixes to exclude from results (e.g. ofub, someprefix) */
   "ignoreList": string,
   /** AI Model (GitHub Models) - GitHub Models model to use for emoji candidate generation */

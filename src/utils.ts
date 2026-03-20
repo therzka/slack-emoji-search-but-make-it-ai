@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { askAI } from "./ai";
+import { askAI, streamAI } from "./ai";
 import Fuse from "fuse.js";
 import {
   getRankedEmojiMatches,
@@ -141,6 +141,38 @@ Examples:
 Return ONLY a valid JSON array, no other text.`;
 
 /**
+ * Extracts a JSON array from a raw LLM response, tolerating common local model quirks:
+ * - Qwen3 <think>...</think> reasoning blocks
+ * - Markdown code fences (```json ... ```)
+ * - Extra prose before or after the array
+ */
+function extractJsonArray(raw: string): unknown[] {
+  // Strip <think>...</think> blocks (Qwen3 thinking mode)
+  let cleaned = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  // Strip markdown code fences
+  cleaned = cleaned
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/, "")
+    .trim();
+
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {
+    // fall through to regex extraction
+  }
+
+  // Extract the first [...] block and try parsing that
+  const match = cleaned.match(/\[[\s\S]*?\]/);
+  if (match) {
+    const parsed = JSON.parse(match[0]);
+    if (Array.isArray(parsed)) return parsed;
+  }
+
+  throw new Error("No JSON array found in LLM response");
+}
+
+/**
  * Uses AI to generate plausible emoji name candidates for a user query.
  */
 async function extractSearchTerms(query: string): Promise<string[]> {
@@ -150,10 +182,9 @@ async function extractSearchTerms(query: string): Promise<string[]> {
     const aiResponse = await askAI(query, EXTRACTION_SYSTEM_PROMPT);
     console.log("[search] AI raw response:", aiResponse.trim());
 
-    const parsed = JSON.parse(aiResponse.trim());
-    const candidates = Array.isArray(parsed) ? parsed : fallback;
+    const candidates = extractJsonArray(aiResponse);
     console.log("[search] AI candidates:", candidates);
-    return candidates;
+    return candidates as string[];
   } catch (error) {
     console.error("[search] AI extraction failed, using fallback:", error);
     console.log("[search] Fallback terms:", fallback);
@@ -252,3 +283,66 @@ export const readEmojiDirectory = async (
     keywords: [name, ...(aliasesData[name] ?? [])],
   }));
 };
+
+/**
+ * Streaming variant of the emoji search pipeline.
+ * Calls `onUpdate` progressively as each AI-generated term is received and searched,
+ * so results appear in the UI before the AI finishes generating all candidates.
+ * Falls back to the non-streaming pipeline on error.
+ */
+export async function searchEmojisStream(
+  directoryPath: string,
+  aiSearchTerm: string,
+  ignoreList: string[] = [],
+  onUpdate: (emojis: emojiItem[]) => void,
+): Promise<void> {
+  if (aiSearchTerm.trim() === "") return;
+
+  const { emojisData, aliasesData, fuse } = await loadEmojiData(directoryPath);
+  const allEmojiNames = Object.keys(emojisData);
+  const termMatches: EmojiTermMatches[] = [];
+
+  const processTerm = (term: string) => {
+    const substrMatches = substringMatchEmojis(term, allEmojiNames, 5);
+    const fuseResults = fuse.search(term, { limit: 5 });
+    const fuseNames = fuseResults.map((r) => r.item.canonicalName);
+
+    termMatches.push({
+      term,
+      substringMatches: substrMatches.filter((name) => !isAnimationFrame(name)),
+      fuseMatches: fuseNames.filter((name) => !isAnimationFrame(name)),
+    });
+
+    console.log(
+      `[search] Term "${term}": ${substrMatches.length} substring, ${fuseNames.length} fuse`,
+    );
+
+    const finalNames = rankEmojiMatches(termMatches, {
+      query: aiSearchTerm,
+      limit: 20,
+      ignoreList,
+    }).filter((name) => name in emojisData);
+
+    onUpdate(
+      finalNames.map((name) => ({
+        emojiPath: path.join(directoryPath, "emojis", emojisData[name]),
+        keywords: [name, ...(aliasesData[name] ?? [])],
+      })),
+    );
+  };
+
+  try {
+    await streamAI(aiSearchTerm, EXTRACTION_SYSTEM_PROMPT, processTerm);
+  } catch (error) {
+    console.error(
+      "[search] Streaming AI failed, falling back to non-streaming:",
+      error,
+    );
+    const emojis = await readEmojiDirectory(
+      directoryPath,
+      aiSearchTerm,
+      ignoreList,
+    );
+    onUpdate(emojis);
+  }
+}
