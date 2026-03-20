@@ -111,7 +111,7 @@ export function clearEmojiCache(): void {
   cachedFuse = null;
 }
 
-const EXTRACTION_SYSTEM_PROMPT = `Find emojis in a Slack custom emoji collection. Given a phrase, output 6-10 plausible emoji name fragments as a JSON array.
+const EXTRACTION_SYSTEM_PROMPT = `Find emojis in a Slack custom emoji collection. Given a phrase, output 10-15 plausible emoji name fragments as a JSON array.
 
 Think about: reactions (facepalm, slow-clap, this-is-fine), emotions (love, mind-blown), objects (taco, rocket), memes/characters (picard, doge, elmo), compound names (mic-drop, chef-kiss), and slang equivalents ("throw out"→yeet, "agree"→this, "drunk"→wasted).
 
