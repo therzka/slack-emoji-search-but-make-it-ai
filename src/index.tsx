@@ -15,7 +15,7 @@ import { runGitPull } from "./utils/runGitPull";
 import { AliasList } from "./components/AliasList";
 
 export default function Command() {
-  const { emojiDirectory, githubToken, ignoreList } =
+  const { emojiDirectory, githubToken, ignoreList, aiProvider, localEndpoint, localModel } =
     getPreferenceValues<Preferences.Index>();
   const [emojis, setEmojis] = useState<emojiItem[]>([]);
   const [searchText, setSearchText] = useState("");
@@ -32,15 +32,34 @@ export default function Command() {
       );
       return;
     }
-    if (!githubToken) {
-      showToast(
-        Toast.Style.Failure,
-        "GitHub token not set",
-        "Add a GitHub PAT with models:read scope in extension preferences.",
-      );
-      return;
+    if (aiProvider === "local") {
+      if (!localEndpoint) {
+        showToast(
+          Toast.Style.Failure,
+          "Local LLM endpoint not set",
+          "Add a local LLM endpoint URL in extension preferences.",
+        );
+        return;
+      }
+      if (!localModel) {
+        showToast(
+          Toast.Style.Failure,
+          "Local LLM model not set",
+          "Add a local model name in extension preferences.",
+        );
+        return;
+      }
+    } else {
+      if (!githubToken) {
+        showToast(
+          Toast.Style.Failure,
+          "GitHub token not set",
+          "Add a GitHub PAT with models:read scope in extension preferences.",
+        );
+        return;
+      }
     }
-  }, [emojiDirectory, githubToken]);
+  }, [emojiDirectory, githubToken, aiProvider, localEndpoint, localModel]);
 
   useEffect(() => {
     if (submittedSearchText.trim() === "") {

@@ -25,10 +25,22 @@
           "type": "directory"
         },
         {
+          "name": "aiProvider",
+          "title": "AI Provider",
+          "description": "Choose between GitHub Models (cloud) or a local LLM server (e.g. Ollama, LM Studio)",
+          "required": false,
+          "type": "dropdown",
+          "default": "github",
+          "data": [
+            { "title": "GitHub Models", "value": "github" },
+            { "title": "Local LLM", "value": "local" }
+          ]
+        },
+        {
           "name": "githubToken",
           "title": "GitHub Personal Access Token",
-          "description": "PAT with models:read scope for AI-powered search via GitHub Models",
-          "required": true,
+          "description": "PAT with models:read scope for AI-powered search via GitHub Models (not needed for Local LLM)",
+          "required": false,
           "type": "password"
         },
         {
@@ -41,7 +53,7 @@
         },
         {
           "name": "aiModel",
-          "title": "AI Model",
+          "title": "AI Model (GitHub Models)",
           "description": "GitHub Models model to use for emoji candidate generation",
           "required": false,
           "type": "dropdown",
@@ -53,6 +65,22 @@
             { "title": "GPT-4o — Strong general purpose", "value": "openai/gpt-4o" },
             { "title": "GPT-4o mini — Fast GPT-4o", "value": "openai/gpt-4o-mini" }
           ]
+        },
+        {
+          "name": "localEndpoint",
+          "title": "Local LLM Endpoint",
+          "description": "OpenAI-compatible chat completions URL for your local LLM (e.g. http://localhost:11434/v1/chat/completions)",
+          "required": false,
+          "type": "textfield",
+          "default": ""
+        },
+        {
+          "name": "localModel",
+          "title": "Local LLM Model",
+          "description": "Model name to use with your local LLM server (e.g. llama3.2, mistral, gemma2)",
+          "required": false,
+          "type": "textfield",
+          "default": ""
         }
       ]
     }
