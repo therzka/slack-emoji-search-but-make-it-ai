@@ -1,6 +1,7 @@
 import { getPreferenceValues } from "@raycast/api";
 
 const GITHUB_MODELS_URL = "https://models.github.ai/inference/chat/completions";
+const STREAM_TIMEOUT_MS = 30_000;
 
 interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -18,6 +19,9 @@ interface AIPreferences {
   localEndpoint: string;
   localModel: string;
 }
+
+// Module-level warmup abort controller so real searches can cancel it
+let warmupAbort: AbortController | null = null;
 
 function resolveProvider(prefs: AIPreferences): {
   provider: "github" | "local";
@@ -40,15 +44,25 @@ function resolveProvider(prefs: AIPreferences): {
   };
 }
 
+/** Cancel any in-flight warmup request so it doesn't block real searches. */
+export function abortWarmup(): void {
+  if (warmupAbort) {
+    console.log("[ai] aborting warmup to prioritize real search");
+    warmupAbort.abort();
+    warmupAbort = null;
+  }
+}
+
 /**
  * Fires a minimal background request to the local LLM to force it to load into memory.
- * Call this when the extension mounts so the model is warm before the user's first search.
- * Errors are silently ignored — this is a best-effort optimization only.
+ * Can be cancelled by abortWarmup() if a real search starts before warmup finishes.
  */
 export async function warmUpLocalLLM(): Promise<void> {
   const prefs = getPreferenceValues<AIPreferences>();
   const { provider, url, model } = resolveProvider(prefs);
   if (provider !== "local" || !url || !model || model === "(unset)") return;
+
+  warmupAbort = new AbortController();
 
   try {
     console.log("[ai] warming up local LLM...");
@@ -61,10 +75,13 @@ export async function warmUpLocalLLM(): Promise<void> {
         max_tokens: 1,
         stream: false,
       }),
+      signal: warmupAbort.signal,
     });
     console.log(`[ai] warmup complete (status ${response.status})`);
   } catch {
-    // Ignore warmup failures — the real search will surface any real errors
+    // Ignore warmup failures (including abort) — the real search will surface any real errors
+  } finally {
+    warmupAbort = null;
   }
 }
 
@@ -89,18 +106,26 @@ export async function askAI(prompt: string, system?: string): Promise<string> {
 
 /**
  * Streams a prompt to the configured AI provider, calling `onTerm` for each string item
- * extracted from the JSON array as it streams in. Useful for progressive UI updates.
+ * extracted from the JSON array as it streams in.
+ * Includes a 30-second timeout and detailed diagnostic logging.
  */
 export async function streamAI(
   prompt: string,
   system: string | undefined,
   onTerm: (term: string) => void,
 ): Promise<void> {
+  // Cancel any in-flight warmup so it doesn't block this request (Ollama serializes)
+  abortWarmup();
+
   const prefs = getPreferenceValues<AIPreferences>();
   const { provider, model, url, token } = resolveProvider(prefs);
-  console.log(`[ai] streaming provider=${provider} model=${model}`);
+  const t0 = Date.now();
 
-  if (!url) throw new Error("Local LLM endpoint is not configured.");
+  console.log(
+    `[ai:stream] START provider=${provider} model=${model} url=${url}`,
+  );
+
+  if (!url) throw new Error("AI endpoint is not configured.");
 
   const messages: ChatMessage[] = [];
   if (system) messages.push({ role: "system", content: system });
@@ -114,13 +139,39 @@ export async function streamAI(
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ model, messages, stream: true }),
-  });
+  const abort = new AbortController();
+  const timeout = setTimeout(() => {
+    console.log(`[ai:stream] TIMEOUT after ${STREAM_TIMEOUT_MS}ms — aborting`);
+    abort.abort();
+  }, STREAM_TIMEOUT_MS);
+
+  let response: Response;
+  try {
+    console.log(`[ai:stream] fetching... (${Date.now() - t0}ms)`);
+    response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ model, messages, stream: true }),
+      signal: abort.signal,
+    });
+    console.log(
+      `[ai:stream] response headers arrived (${Date.now() - t0}ms) status=${response.status} content-type=${response.headers.get("content-type")}`,
+    );
+  } catch (error) {
+    clearTimeout(timeout);
+    const elapsed = Date.now() - t0;
+    if (abort.signal.aborted) {
+      throw new Error(
+        `AI request timed out after ${elapsed}ms. Is your local LLM server running?`,
+      );
+    }
+    throw new Error(
+      `AI fetch failed after ${elapsed}ms: ${error instanceof Error ? error.message : error}`,
+    );
+  }
 
   if (!response.ok) {
+    clearTimeout(timeout);
     const body = await response.text().catch(() => "");
     if (response.status === 401)
       throw new Error(
@@ -133,36 +184,74 @@ export async function streamAI(
     throw new Error(`AI API error (${response.status}): ${body}`);
   }
 
-  if (!response.body) throw new Error("Streaming response body is null.");
+  if (!response.body) {
+    clearTimeout(timeout);
+    throw new Error("Streaming response body is null.");
+  }
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let sseBuffer = "";
   let contentBuffer = "";
   let termsFound = 0;
+  let chunksReceived = 0;
+  let dataLinesLogged = 0;
 
   try {
     let streaming = true;
     while (streaming) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        console.log(
+          `[ai:stream] stream ended (done=true) (${Date.now() - t0}ms) chunks=${chunksReceived} terms=${termsFound}`,
+        );
+        break;
+      }
 
-      sseBuffer += decoder.decode(value, { stream: true });
+      chunksReceived++;
+      const chunk = decoder.decode(value, { stream: true });
+
+      if (chunksReceived === 1) {
+        console.log(
+          `[ai:stream] first chunk arrived (${Date.now() - t0}ms) length=${chunk.length}`,
+        );
+        console.log(
+          `[ai:stream] first chunk preview: ${JSON.stringify(chunk.slice(0, 200))}`,
+        );
+      }
+
+      sseBuffer += chunk;
       const lines = sseBuffer.split("\n");
       sseBuffer = lines.pop() ?? "";
 
       for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        const data = line.slice(6).trim();
+        if (!line.startsWith("data: ") && !line.startsWith("data:")) continue;
+        const data = line.replace(/^data:\s*/, "").trim();
         if (data === "[DONE]") {
+          console.log(
+            `[ai:stream] [DONE] received (${Date.now() - t0}ms) terms=${termsFound}`,
+          );
           streaming = false;
           break;
+        }
+
+        // Log first few raw SSE data lines for format debugging
+        if (dataLinesLogged < 3) {
+          console.log(
+            `[ai:stream] raw data line #${dataLinesLogged}: ${JSON.stringify(data.slice(0, 200))}`,
+          );
+          dataLinesLogged++;
         }
 
         let parsed: { choices?: { delta?: { content?: string } }[] };
         try {
           parsed = JSON.parse(data);
         } catch {
+          if (dataLinesLogged <= 3) {
+            console.log(
+              `[ai:stream] failed to parse SSE data: ${JSON.stringify(data.slice(0, 100))}`,
+            );
+          }
           continue;
         }
 
@@ -178,13 +267,27 @@ export async function streamAI(
         const matches = [...arrayContent.matchAll(/"((?:[^"\\]|\\.)*)"/g)];
         while (termsFound < matches.length) {
           const term = matches[termsFound][1].trim().toLowerCase();
-          if (term) onTerm(term);
+          if (term) {
+            console.log(
+              `[ai:stream] term #${termsFound}: "${term}" (${Date.now() - t0}ms)`,
+            );
+            onTerm(term);
+          }
           termsFound++;
         }
       }
     }
   } finally {
+    clearTimeout(timeout);
     reader.releaseLock();
+    console.log(
+      `[ai:stream] DONE total=${Date.now() - t0}ms chunks=${chunksReceived} terms=${termsFound} contentLength=${contentBuffer.length}`,
+    );
+    if (termsFound === 0 && contentBuffer.length > 0) {
+      console.log(
+        `[ai:stream] WARNING: received content but extracted 0 terms. Full content: ${JSON.stringify(contentBuffer.slice(0, 500))}`,
+      );
+    }
   }
 }
 

@@ -281,8 +281,14 @@ export async function searchEmojisStream(
 ): Promise<void> {
   if (aiSearchTerm.trim() === "") return;
 
+  const t0 = Date.now();
+  console.log(`[search:stream] START query="${aiSearchTerm}"`);
+
   const { emojisData, aliasesData, fuse } = await loadEmojiData(directoryPath);
   const allEmojiNames = Object.keys(emojisData);
+  console.log(
+    `[search:stream] emoji data loaded (${Date.now() - t0}ms) emojis=${allEmojiNames.length}`,
+  );
   const termMatches: EmojiTermMatches[] = [];
 
   const processTerm = (term: string) => {
@@ -297,7 +303,7 @@ export async function searchEmojisStream(
     });
 
     console.log(
-      `[search] Term "${term}": ${substrMatches.length} substring, ${fuseNames.length} fuse`,
+      `[search:stream] term "${term}": ${substrMatches.length} substring, ${fuseNames.length} fuse (${Date.now() - t0}ms)`,
     );
 
     const finalNames = rankEmojiMatches(termMatches, {
@@ -305,6 +311,10 @@ export async function searchEmojisStream(
       limit: 20,
       ignoreList,
     }).filter((name) => name in emojisData);
+
+    console.log(
+      `[search:stream] ranked ${finalNames.length} results after ${termMatches.length} terms`,
+    );
 
     onUpdate(
       finalNames.map((name) => ({
@@ -315,16 +325,23 @@ export async function searchEmojisStream(
   };
 
   try {
+    console.log(`[search:stream] starting AI stream... (${Date.now() - t0}ms)`);
     await streamAI(aiSearchTerm, EXTRACTION_SYSTEM_PROMPT, processTerm);
+    console.log(
+      `[search:stream] DONE total=${Date.now() - t0}ms terms=${termMatches.length}`,
+    );
   } catch (error) {
     console.error(
-      "[search] Streaming AI failed, falling back to non-streaming:",
+      `[search:stream] streaming failed (${Date.now() - t0}ms), falling back:`,
       error,
     );
     const emojis = await readEmojiDirectory(
       directoryPath,
       aiSearchTerm,
       ignoreList,
+    );
+    console.log(
+      `[search:stream] fallback returned ${emojis.length} results (${Date.now() - t0}ms)`,
     );
     onUpdate(emojis);
   }
