@@ -113,6 +113,7 @@ export default function Command() {
     let lastEmojis: emojiItem[] = [];
     searchEmojisStream(
       source,
+      emojiDirectory,
       submittedSearchText,
       parsedIgnoreList,
       (emojis) => {

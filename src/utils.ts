@@ -403,6 +403,7 @@ export const readEmojiDirectory = async (
  */
 export async function searchEmojisStream(
   source: EmojiSource,
+  directoryPath: string,
   aiSearchTerm: string,
   ignoreList: string[] = [],
   onUpdate: (emojis: emojiItem[]) => void,
@@ -489,6 +490,7 @@ export async function searchEmojisStream(
     );
     const emojis = await readEmojiDirectory(
       source,
+      directoryPath,
       aiSearchTerm,
       ignoreList,
     );
