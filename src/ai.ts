@@ -1,7 +1,7 @@
 import { getPreferenceValues } from "@raycast/api";
 
 const GITHUB_MODELS_URL = "https://models.github.ai/inference/chat/completions";
-const STREAM_TIMEOUT_MS = 30_000;
+const STREAM_TIMEOUT_MS = 60_000;
 
 interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -19,9 +19,6 @@ interface AIPreferences {
   localEndpoint: string;
   localModel: string;
 }
-
-// Module-level warmup abort controller so real searches can cancel it
-let warmupAbort: AbortController | null = null;
 
 function resolveProvider(prefs: AIPreferences): {
   provider: "github" | "local";
@@ -44,25 +41,14 @@ function resolveProvider(prefs: AIPreferences): {
   };
 }
 
-/** Cancel any in-flight warmup request so it doesn't block real searches. */
-export function abortWarmup(): void {
-  if (warmupAbort) {
-    console.log("[ai] aborting warmup to prioritize real search");
-    warmupAbort.abort();
-    warmupAbort = null;
-  }
-}
-
 /**
  * Fires a minimal background request to the local LLM to force it to load into memory.
- * Can be cancelled by abortWarmup() if a real search starts before warmup finishes.
+ * Runs to completion so the model is fully loaded when the first real search arrives.
  */
 export async function warmUpLocalLLM(): Promise<void> {
   const prefs = getPreferenceValues<AIPreferences>();
   const { provider, url, model } = resolveProvider(prefs);
   if (provider !== "local" || !url || !model || model === "(unset)") return;
-
-  warmupAbort = new AbortController();
 
   try {
     console.log("[ai] warming up local LLM...");
@@ -74,14 +60,12 @@ export async function warmUpLocalLLM(): Promise<void> {
         messages: [{ role: "user", content: "hi" }],
         max_tokens: 1,
         stream: false,
+        keep_alive: "30m",
       }),
-      signal: warmupAbort.signal,
     });
     console.log(`[ai] warmup complete (status ${response.status})`);
   } catch {
-    // Ignore warmup failures (including abort) — the real search will surface any real errors
-  } finally {
-    warmupAbort = null;
+    // Ignore warmup failures — the real search will surface any real errors
   }
 }
 
@@ -114,9 +98,6 @@ export async function streamAI(
   system: string | undefined,
   onTerm: (term: string) => void,
 ): Promise<void> {
-  // Cancel any in-flight warmup so it doesn't block this request (Ollama serializes)
-  abortWarmup();
-
   const prefs = getPreferenceValues<AIPreferences>();
   const { provider, model, url, token } = resolveProvider(prefs);
   const t0 = Date.now();
@@ -151,7 +132,12 @@ export async function streamAI(
     response = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify({ model, messages, stream: true }),
+      body: JSON.stringify({
+        model,
+        messages,
+        stream: true,
+        ...(provider === "local" && { keep_alive: "30m" }),
+      }),
       signal: abort.signal,
     });
     console.log(
@@ -283,6 +269,7 @@ export async function streamAI(
     console.log(
       `[ai:stream] DONE total=${Date.now() - t0}ms chunks=${chunksReceived} terms=${termsFound} contentLength=${contentBuffer.length}`,
     );
+    console.log(`[ai:stream] full response: ${JSON.stringify(contentBuffer)}`);
     if (termsFound === 0 && contentBuffer.length > 0) {
       console.log(
         `[ai:stream] WARNING: received content but extracted 0 terms. Full content: ${JSON.stringify(contentBuffer.slice(0, 500))}`,
@@ -356,6 +343,7 @@ async function callLocalLLM(
       model,
       messages,
       response_format: { type: "json_object" },
+      keep_alive: "30m",
     }),
   });
 

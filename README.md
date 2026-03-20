@@ -99,6 +99,8 @@ Then in extension preferences:
 - **Local LLM Endpoint** → `http://localhost:11434/v1/chat/completions`
 - **Local LLM Model** → `llama3.2:3b`
 
+> **Performance note:** The first search after opening the extension triggers model loading (~10-30s depending on model size and hardware). Subsequent searches are fast (~1s) since the model stays in memory. Use `llama3.2:1b` for the fastest loading times.
+
 ## License
 
 MIT
