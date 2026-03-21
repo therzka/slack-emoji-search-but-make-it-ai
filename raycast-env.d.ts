@@ -15,17 +15,17 @@ declare type Preferences = ExtensionPreferences
 declare namespace Preferences {
   /** Preferences accessible in the `index` command */
   export type Index = ExtensionPreferences & {
-  /** Emoji Source - Where to load emojis from */
+  /** Emoji Source - Where to load emojis from — a local directory or a GitHub repository */
   "emojiSource": "local" | "github",
-  /** Emoji Directory - Path to local emoji directory containing emojis/emojis.json and emojis/aliases.json */
-  "emojiDirectory": string,
-  /** GitHub Emoji Repository - Public GitHub repository with your emoji collection in owner/repo format */
+  /** Emoji Directory - Path to local emoji directory containing emojis/emojis.json and emojis/aliases.json (required when Emoji Source is "Local directory") */
+  "emojiDirectory"?: string,
+  /** GitHub Emoji Repository - GitHub repository with your emoji collection in owner/repo format, e.g. myorg/slack-emojis (required when Emoji Source is "GitHub repository"). Works with both public and private repos. */
   "githubEmojiRepo": string,
-  /** GitHub Emoji Branch - Branch of the GitHub emoji repository to use */
+  /** GitHub Emoji Branch - Branch of the GitHub emoji repository to use (defaults to main) */
   "githubEmojiBranch": string,
   /** AI Provider - Choose between GitHub Models (cloud) or a local LLM server (e.g. Ollama, LM Studio) */
   "aiProvider": "github" | "local",
-  /** GitHub Personal Access Token - PAT with models:read scope for AI-powered search via GitHub Models (not needed for Local LLM) */
+  /** GitHub Personal Access Token - PAT with models:read scope for AI-powered search via GitHub Models. For private emoji repos, also add the repo scope (classic PAT) or contents:read permission (fine-grained PAT). Not needed for Local LLM with a public repo. */
   "githubToken"?: string,
   /** Ignore List - Comma-separated list of emoji name prefixes to exclude from results (e.g. ofub, someprefix) */
   "ignoreList": string,

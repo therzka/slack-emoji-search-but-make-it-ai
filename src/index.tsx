@@ -12,14 +12,29 @@ import {
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { emojiItem, EmojiSource, searchEmojisStream, clearEmojiCache } from "./utils";
+import {
+  emojiItem,
+  EmojiSource,
+  searchEmojisStream,
+  clearEmojiCache,
+  clearImageCache,
+} from "./utils";
 import { warmUpLocalLLM } from "./ai";
 import { runGitPull } from "./utils/runGitPull";
 import { AliasList } from "./components/AliasList";
 
 export default function Command() {
-  const { emojiSource, emojiDirectory, githubEmojiRepo, githubEmojiBranch, githubToken, ignoreList, aiProvider, localEndpoint, localModel } =
-    getPreferenceValues<Preferences.Index>();
+  const {
+    emojiSource,
+    emojiDirectory,
+    githubEmojiRepo,
+    githubEmojiBranch,
+    githubToken,
+    ignoreList,
+    aiProvider,
+    localEndpoint,
+    localModel,
+  } = getPreferenceValues<Preferences.Index>();
 
   const repoParts = (githubEmojiRepo ?? "").split("/");
   const source: EmojiSource =
@@ -30,7 +45,7 @@ export default function Command() {
           repo: repoParts[1] ?? "",
           branch: githubEmojiBranch?.trim() || "main",
         }
-      : { type: "local", directory: emojiDirectory };
+      : { type: "local", directory: emojiDirectory ?? "" };
   const [emojis, setEmojis] = useState<emojiItem[]>([]);
   const [searchText, setSearchText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -93,7 +108,16 @@ export default function Command() {
       hasWarmedUpRef.current = true;
       warmUpLocalLLM();
     }
-  }, [emojiSource, emojiDirectory, githubEmojiRepo, githubEmojiBranch, githubToken, aiProvider, localEndpoint, localModel]);
+  }, [
+    emojiSource,
+    emojiDirectory,
+    githubEmojiRepo,
+    githubEmojiBranch,
+    githubToken,
+    aiProvider,
+    localEndpoint,
+    localModel,
+  ]);
 
   useEffect(() => {
     if (submittedSearchText.trim() === "") {
@@ -113,7 +137,6 @@ export default function Command() {
     let lastEmojis: emojiItem[] = [];
     searchEmojisStream(
       source,
-      emojiDirectory,
       submittedSearchText,
       parsedIgnoreList,
       (emojis) => {
@@ -121,6 +144,7 @@ export default function Command() {
         lastEmojis = emojis;
         setEmojis(emojis);
       },
+      githubToken,
     )
       .then(() => {
         if (searchId !== searchIdRef.current) return;
@@ -137,7 +161,14 @@ export default function Command() {
         if (searchId !== searchIdRef.current) return;
         setIsLoading(false);
       });
-  }, [emojiSource, emojiDirectory, githubEmojiRepo, githubEmojiBranch, submittedSearchText, searchCounter]);
+  }, [
+    emojiSource,
+    emojiDirectory,
+    githubEmojiRepo,
+    githubEmojiBranch,
+    submittedSearchText,
+    searchCounter,
+  ]);
 
   const handleClearSearch = () => {
     setSearchText("");
@@ -148,8 +179,10 @@ export default function Command() {
   const updateEmojiRepo = async () => {
     if (source.type === "github") {
       clearEmojiCache();
+      await clearImageCache();
       showToast({
-        title: "Emoji cache cleared — will re-fetch from GitHub on next search.",
+        title:
+          "Emoji cache cleared — will re-fetch from GitHub on next search.",
         style: Toast.Style.Success,
       });
       return;
@@ -160,7 +193,7 @@ export default function Command() {
       style: Toast.Style.Animated,
     });
 
-    const { exitCode, stderr } = await runGitPull(emojiDirectory);
+    const { exitCode, stderr } = await runGitPull(emojiDirectory ?? "");
     if (exitCode !== 0) {
       showToast({
         title: "Error updating emoji repository",
@@ -192,7 +225,9 @@ export default function Command() {
 
   const UpdateRepoAction = () => (
     <Action
-      title={source.type === "github" ? "Refresh Emoji Cache" : "Update Emoji Repo"}
+      title={
+        source.type === "github" ? "Refresh Emoji Cache" : "Update Emoji Repo"
+      }
       icon={Icon.RotateClockwise}
       shortcut={{ modifiers: ["cmd"], key: "u" }}
       onAction={updateEmojiRepo}
@@ -288,9 +323,15 @@ export default function Command() {
                         const response = await fetch(filePath);
                         if (!response.ok)
                           throw new Error(`HTTP ${response.status}`);
-                        const buffer = Buffer.from(await response.arrayBuffer());
-                        const ext = path.extname(new URL(filePath).pathname) || ".png";
-                        localPath = path.join(os.tmpdir(), `emoji-${Date.now()}${ext}`);
+                        const buffer = Buffer.from(
+                          await response.arrayBuffer(),
+                        );
+                        const ext =
+                          path.extname(new URL(filePath).pathname) || ".png";
+                        localPath = path.join(
+                          os.tmpdir(),
+                          `emoji-${Date.now()}${ext}`,
+                        );
                         await fs.promises.writeFile(localPath, buffer);
                         tempCreated = true;
                       }

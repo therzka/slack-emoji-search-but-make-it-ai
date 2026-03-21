@@ -14,17 +14,19 @@ A [Raycast](https://raycast.com) extension that semantically searches a local Sl
 ## Prerequisites
 
 - [Raycast](https://raycast.com) installed
-- A local directory of Slack emojis with the expected structure (see below)
+- Your emoji collection in one of:
+  - A **local directory** with the expected structure (see below)
+  - A **GitHub repository** (public or private)
 - **One of:**
-  - A GitHub Personal Access Token (PAT) with the `models:read` scope — [create one here](https://github.com/settings/tokens)
+  - A GitHub Personal Access Token (PAT) with the `models` scope — [create one here](https://github.com/settings/tokens). For private emoji repos, also add the `repo` scope (classic PAT) or `Contents: Read` permission (fine-grained PAT).
   - A local LLM server (e.g. [Ollama](https://ollama.com)) with a small model installed (see [Recommended Local Models](#recommended-local-models))
 
-### Expected Emoji Directory Structure
+### Expected Emoji Collection Structure
 
-Your emoji directory must contain an `emojis/` subfolder with two JSON files:
+Whether stored locally or in a GitHub repo, your emoji collection must have this layout:
 
 ```
-your-emoji-directory/
+your-emoji-directory/          # or repo root
 └── emojis/
     ├── emojis.json     # { "emoji_name": "relative/path/to/image.png", ... }
     ├── aliases.json    # { "emoji_name": ["alias1", "alias2"], ... }
@@ -36,12 +38,14 @@ your-emoji-directory/
 
 ## Setup
 
-1. Prepare your emoji directory in the structure above
+1. Prepare your emoji collection in the structure above (locally or in a GitHub repo)
 2. Install and open this extension in Raycast
 3. In extension preferences, set:
-   - **Emoji Directory** — path to your emoji directory
+   - **Emoji Source** — Local directory or GitHub repository
+   - For **Local**: set **Emoji Directory** — path to your local emoji directory
+   - For **GitHub**: set **GitHub Emoji Repository** in `owner/repo` format (public or private), and optionally **GitHub Emoji Branch** (defaults to `main`)
    - **AI Provider** — GitHub Models (cloud) or Local LLM
-   - For **GitHub Models**: set your GitHub PAT and optionally choose a model (defaults to GPT-5 mini)
+   - For **GitHub Models**: set your GitHub PAT with the `models` scope (add `repo` scope for private emoji repos); optionally choose a model (defaults to GPT-5 mini)
    - For **Local LLM**: set the endpoint URL and model name (see [Recommended Local Models](#recommended-local-models))
    - **Ignore List** *(optional)* — comma-separated terms to filter out of results (any emoji whose name contains a matching segment is excluded)
 
@@ -61,7 +65,7 @@ Open the **Search Slack Emojis with AI** command in Raycast. Type a phrase or de
 | **⌘ ⇧ Enter** | Copy emoji image file to clipboard |
 | **⌘ L** | Show aliases for the selected emoji |
 | **⌘ ⇧ N** | Clear results and start a new search |
-| **⌘ U** | Pull latest changes from the emoji git repo |
+| **⌘ U** | Pull latest changes from the emoji git repo / refresh GitHub emoji cache |
 
 ## How It Works
 
@@ -73,7 +77,7 @@ The extension uses a two-stage AI search pipeline:
 
 Results stream in progressively — you'll see matches appear as the AI generates each term, rather than waiting for all candidates.
 
-Supports both [GitHub Models](https://github.com/marketplace/models) (cloud) and local OpenAI-compatible LLM servers (Ollama, LM Studio, etc.).
+Supports both [GitHub Models](https://github.com/marketplace/models) (cloud) and local OpenAI-compatible LLM servers (Ollama, LM Studio, etc.). Emoji collections can be loaded from a local directory or a public/private GitHub repository (images for private repos are cached locally on demand).
 
 ## Recommended Local Models
 
