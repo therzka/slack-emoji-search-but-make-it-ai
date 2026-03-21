@@ -18,11 +18,39 @@
       "mode": "view",
       "preferences": [
         {
+          "name": "emojiSource",
+          "title": "Emoji Source",
+          "description": "Where to load emojis from — a local directory or a GitHub repository",
+          "required": false,
+          "type": "dropdown",
+          "default": "local",
+          "data": [
+            { "title": "Local directory", "value": "local" },
+            { "title": "GitHub repository", "value": "github" }
+          ]
+        },
+        {
           "name": "emojiDirectory",
           "title": "Emoji Directory",
-          "description": "Path to local emoji directory containing emojis/emojis.json and emojis/aliases.json",
-          "required": true,
+          "description": "Path to local emoji directory containing emojis/emojis.json and emojis/aliases.json (required when Emoji Source is \"Local directory\")",
+          "required": false,
           "type": "directory"
+        },
+        {
+          "name": "githubEmojiRepo",
+          "title": "GitHub Emoji Repository",
+          "description": "GitHub repository with your emoji collection in owner/repo format, e.g. myorg/slack-emojis (required when Emoji Source is \"GitHub repository\"). Works with both public and private repos.",
+          "required": false,
+          "type": "textfield",
+          "default": ""
+        },
+        {
+          "name": "githubEmojiBranch",
+          "title": "GitHub Emoji Branch",
+          "description": "Branch of the GitHub emoji repository to use (defaults to main)",
+          "required": false,
+          "type": "textfield",
+          "default": "main"
         },
         {
           "name": "aiProvider",
@@ -39,7 +67,7 @@
         {
           "name": "githubToken",
           "title": "GitHub Personal Access Token",
-          "description": "PAT with models:read scope for AI-powered search via GitHub Models (not needed for Local LLM)",
+          "description": "PAT with models:read scope for AI-powered search via GitHub Models. For private emoji repos, also add the repo scope (classic PAT) or contents:read permission (fine-grained PAT). Not needed for Local LLM with a public repo.",
           "required": false,
           "type": "password"
         },

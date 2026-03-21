@@ -10,20 +10,42 @@ import {
   Icon,
 } from "@raycast/api";
 import fs from "fs";
-import { emojiItem, clearEmojiCache, searchEmojisStream } from "./utils";
+import os from "os";
+import path from "path";
+import {
+  emojiItem,
+  EmojiSource,
+  searchEmojisStream,
+  clearEmojiCache,
+  clearImageCache,
+} from "./utils";
 import { warmUpLocalLLM } from "./ai";
 import { runGitPull } from "./utils/runGitPull";
 import { AliasList } from "./components/AliasList";
 
 export default function Command() {
   const {
+    emojiSource,
     emojiDirectory,
+    githubEmojiRepo,
+    githubEmojiBranch,
     githubToken,
     ignoreList,
     aiProvider,
     localEndpoint,
     localModel,
   } = getPreferenceValues<Preferences.Index>();
+
+  const repoParts = (githubEmojiRepo ?? "").split("/");
+  const source: EmojiSource =
+    emojiSource === "github"
+      ? {
+          type: "github",
+          owner: repoParts[0] ?? "",
+          repo: repoParts[1] ?? "",
+          branch: githubEmojiBranch?.trim() || "main",
+        }
+      : { type: "local", directory: emojiDirectory ?? "" };
   const [emojis, setEmojis] = useState<emojiItem[]>([]);
   const [searchText, setSearchText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -33,13 +55,26 @@ export default function Command() {
   const hasWarmedUpRef = useRef(false);
 
   useEffect(() => {
-    if (!emojiDirectory || !fs.existsSync(emojiDirectory)) {
-      showToast(
-        Toast.Style.Failure,
-        "Emoji directory not found",
-        "Set a valid emoji directory in extension preferences.",
-      );
-      return;
+    if (emojiSource === "github") {
+      const repo = githubEmojiRepo?.trim() ?? "";
+      const parts = repo.split("/");
+      if (!repo || parts.length !== 2 || !parts[0] || !parts[1]) {
+        showToast(
+          Toast.Style.Failure,
+          "GitHub repository not configured",
+          'Set a GitHub emoji repository in the format "owner/repo" in extension preferences.',
+        );
+        return;
+      }
+    } else {
+      if (!emojiDirectory || !fs.existsSync(emojiDirectory)) {
+        showToast(
+          Toast.Style.Failure,
+          "Emoji directory not found",
+          "Set a valid emoji directory in extension preferences.",
+        );
+        return;
+      }
     }
     if ((aiProvider || "github") === "local") {
       if (!localEndpoint) {
@@ -68,13 +103,21 @@ export default function Command() {
         return;
       }
     }
-
     // Pre-warm local LLM once on mount so the model is loaded before the first search
     if (!hasWarmedUpRef.current && (aiProvider || "github") === "local") {
       hasWarmedUpRef.current = true;
       warmUpLocalLLM();
     }
-  }, [emojiDirectory, githubToken, aiProvider, localEndpoint, localModel]);
+  }, [
+    emojiSource,
+    emojiDirectory,
+    githubEmojiRepo,
+    githubEmojiBranch,
+    githubToken,
+    aiProvider,
+    localEndpoint,
+    localModel,
+  ]);
 
   useEffect(() => {
     if (submittedSearchText.trim() === "") {
@@ -93,7 +136,7 @@ export default function Command() {
       : [];
     let lastEmojis: emojiItem[] = [];
     searchEmojisStream(
-      emojiDirectory,
+      source,
       submittedSearchText,
       parsedIgnoreList,
       (emojis) => {
@@ -101,6 +144,7 @@ export default function Command() {
         lastEmojis = emojis;
         setEmojis(emojis);
       },
+      githubToken,
     )
       .then(() => {
         if (searchId !== searchIdRef.current) return;
@@ -117,7 +161,14 @@ export default function Command() {
         if (searchId !== searchIdRef.current) return;
         setIsLoading(false);
       });
-  }, [emojiDirectory, submittedSearchText, searchCounter]);
+  }, [
+    emojiSource,
+    emojiDirectory,
+    githubEmojiRepo,
+    githubEmojiBranch,
+    submittedSearchText,
+    searchCounter,
+  ]);
 
   const handleClearSearch = () => {
     setSearchText("");
@@ -126,12 +177,23 @@ export default function Command() {
   };
 
   const updateEmojiRepo = async () => {
+    if (source.type === "github") {
+      clearEmojiCache();
+      await clearImageCache();
+      showToast({
+        title:
+          "Emoji cache cleared — will re-fetch from GitHub on next search.",
+        style: Toast.Style.Success,
+      });
+      return;
+    }
+
     showToast({
       title: "Updating emoji repository...",
       style: Toast.Style.Animated,
     });
 
-    const { exitCode, stderr } = await runGitPull(emojiDirectory);
+    const { exitCode, stderr } = await runGitPull(emojiDirectory ?? "");
     if (exitCode !== 0) {
       showToast({
         title: "Error updating emoji repository",
@@ -163,7 +225,9 @@ export default function Command() {
 
   const UpdateRepoAction = () => (
     <Action
-      title="Update Emoji Repo"
+      title={
+        source.type === "github" ? "Refresh Emoji Cache" : "Update Emoji Repo"
+      }
       icon={Icon.RotateClockwise}
       shortcut={{ modifiers: ["cmd"], key: "u" }}
       onAction={updateEmojiRepo}
@@ -251,10 +315,30 @@ export default function Command() {
                   icon={Icon.Image}
                   shortcut={{ modifiers: ["cmd", "shift"], key: "enter" }}
                   onAction={async () => {
-                    const file = emoji.emojiPath;
+                    const filePath = emoji.emojiPath;
                     try {
-                      const fileContent: Clipboard.Content = { file };
-                      await Clipboard.copy(fileContent);
+                      let localPath = filePath;
+                      let tempCreated = false;
+                      if (filePath.startsWith("http")) {
+                        const response = await fetch(filePath);
+                        if (!response.ok)
+                          throw new Error(`HTTP ${response.status}`);
+                        const buffer = Buffer.from(
+                          await response.arrayBuffer(),
+                        );
+                        const ext =
+                          path.extname(new URL(filePath).pathname) || ".png";
+                        localPath = path.join(
+                          os.tmpdir(),
+                          `emoji-${Date.now()}${ext}`,
+                        );
+                        await fs.promises.writeFile(localPath, buffer);
+                        tempCreated = true;
+                      }
+                      await Clipboard.copy({ file: localPath });
+                      if (tempCreated) {
+                        fs.promises.unlink(localPath).catch(() => {});
+                      }
                     } catch (error) {
                       showToast(
                         Toast.Style.Failure,

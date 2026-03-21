@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { environment } from "@raycast/api";
 import { askAI, streamAI } from "./ai";
 import Fuse from "fuse.js";
 import {
@@ -13,8 +14,12 @@ export type emojiItem = {
   keywords: string[];
 };
 
+export type EmojiSource =
+  | { type: "local"; directory: string }
+  | { type: "github"; owner: string; repo: string; branch: string };
+
 // --- Module-level cache for emoji data and Fuse index ---
-let cachedDirectoryPath: string | null = null;
+let cachedSourceKey: string | null = null;
 let cachedEmojisData: Record<string, string> = {};
 let cachedAliasesData: Record<string, string[]> = {};
 let cachedFuse: Fuse<FuseSearchable> | null = null;
@@ -29,23 +34,107 @@ function isAnimationFrame(name: string): boolean {
   return /^big_.+_\d{2,}$/.test(name);
 }
 
-/**
- * Loads emoji data from disk and builds the Fuse index.
- * Results are cached — subsequent calls with the same directory are instant.
- */
-async function loadEmojiData(directoryPath: string): Promise<{
-  emojisData: Record<string, string>;
-  aliasesData: Record<string, string[]>;
-  fuse: Fuse<FuseSearchable>;
-}> {
-  if (cachedDirectoryPath === directoryPath && cachedFuse) {
-    return {
-      emojisData: cachedEmojisData,
-      aliasesData: cachedAliasesData,
-      fuse: cachedFuse,
-    };
+/** Returns a stable string key identifying an EmojiSource for caching. */
+function getSourceKey(source: EmojiSource): string {
+  if (source.type === "local") return source.directory;
+  return `github:${source.owner}/${source.repo}@${source.branch}`;
+}
+
+/** Validates that a GitHub path segment contains only safe characters. */
+function isValidGitHubSegment(segment: string): boolean {
+  return /^[a-zA-Z0-9_.-]+$/.test(segment);
+}
+
+/** Validates that an emoji relative path from emojis.json is safe (no traversal). */
+function isValidEmojiRelativePath(relPath: string): boolean {
+  return (
+    typeof relPath === "string" &&
+    relPath.length > 0 &&
+    !relPath.startsWith("/") &&
+    !relPath.includes("..") &&
+    !/[\0\r\n]/.test(relPath)
+  );
+}
+
+// --- Emoji image cache for GitHub sources ---
+
+/** Downloads and caches an emoji image from a GitHub repo, returns local path. */
+async function ensureCachedEmojiImage(
+  source: Extract<EmojiSource, { type: "github" }>,
+  relativePath: string,
+  token: string,
+): Promise<string> {
+  const cacheDir = path.join(
+    environment.supportPath,
+    "emoji-cache",
+    source.owner,
+    source.repo,
+    source.branch,
+  );
+  const cachedPath = path.join(cacheDir, relativePath);
+
+  try {
+    await fs.promises.access(cachedPath);
+    return cachedPath;
+  } catch {
+    // Not cached yet — download below
   }
 
+  await fs.promises.mkdir(path.dirname(cachedPath), { recursive: true });
+
+  const url = `https://raw.githubusercontent.com/${source.owner}/${source.repo}/${source.branch}/emojis/${relativePath}`;
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to download emoji image: HTTP ${response.status}`);
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  await fs.promises.writeFile(cachedPath, buffer);
+  return cachedPath;
+}
+
+/** Clears the cached emoji images from disk. */
+export async function clearImageCache(): Promise<void> {
+  const cacheDir = path.join(environment.supportPath, "emoji-cache");
+  try {
+    await fs.promises.rm(cacheDir, { recursive: true, force: true });
+  } catch {
+    // Cache dir might not exist
+  }
+}
+
+/** Builds the Fuse search index from emoji and alias data. */
+function buildFuseIndex(
+  emojisData: Record<string, string>,
+  aliasesData: Record<string, string[]>,
+): Fuse<FuseSearchable> {
+  const fuseSearchList: FuseSearchable[] = [];
+  for (const name of Object.keys(emojisData)) {
+    fuseSearchList.push({
+      canonicalName: name,
+      searchTerm: name.replace(/_/g, " "),
+    });
+    if (aliasesData[name]) {
+      for (const alias of aliasesData[name]) {
+        fuseSearchList.push({
+          canonicalName: name,
+          searchTerm: alias.replace(/_/g, " "),
+        });
+      }
+    }
+  }
+  return new Fuse(fuseSearchList, { keys: ["searchTerm"], threshold: 0.3 });
+}
+
+/**
+ * Loads emoji data from the local filesystem and builds the Fuse index.
+ */
+async function loadEmojiDataFromLocal(directoryPath: string): Promise<{
+  emojisData: Record<string, string>;
+  aliasesData: Record<string, string[]>;
+}> {
   const emojisPath = path.join(directoryPath, "emojis/emojis.json");
   const aliasesPath = path.join(directoryPath, "emojis/aliases.json");
 
@@ -63,39 +152,120 @@ async function loadEmojiData(directoryPath: string): Promise<{
     );
   }
 
-  let emojisData: Record<string, string>;
-  let aliasesData: Record<string, string[]>;
+  return parseEmojiJson(emojisRaw, aliasesRaw);
+}
+
+/**
+ * Loads emoji data from a GitHub repository (public or private) and builds the Fuse index.
+ */
+async function loadEmojiDataFromGitHub(
+  owner: string,
+  repo: string,
+  branch: string,
+  token?: string,
+): Promise<{
+  emojisData: Record<string, string>;
+  aliasesData: Record<string, string[]>;
+}> {
+  if (
+    !isValidGitHubSegment(owner) ||
+    !isValidGitHubSegment(repo) ||
+    !isValidGitHubSegment(branch)
+  ) {
+    throw new Error(
+      `Invalid GitHub repository configuration. Owner, repo, and branch must contain only alphanumeric characters, hyphens, dots, and underscores.`,
+    );
+  }
+
+  const base = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}`;
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  let emojisRaw: string;
+  let aliasesRaw: string;
   try {
-    emojisData = JSON.parse(emojisRaw);
-    aliasesData = JSON.parse(aliasesRaw);
+    const [emojisRes, aliasesRes] = await Promise.all([
+      fetch(`${base}/emojis/emojis.json`, { headers }),
+      fetch(`${base}/emojis/aliases.json`, { headers }),
+    ]);
+    if (!emojisRes.ok)
+      throw new Error(`emojis.json responded with HTTP ${emojisRes.status}`);
+    if (!aliasesRes.ok)
+      throw new Error(`aliases.json responded with HTTP ${aliasesRes.status}`);
+    [emojisRaw, aliasesRaw] = await Promise.all([
+      emojisRes.text(),
+      aliasesRes.text(),
+    ]);
   } catch (error) {
+    const detail = error instanceof Error ? error.message : "Unknown error";
+    const isAuthError = detail.includes("401") || detail.includes("403");
+    const hint = isAuthError
+      ? "If this is a private repository, ensure your GitHub token has the 'repo' scope (classic PAT) or 'contents:read' permission (fine-grained PAT)."
+      : "Make sure the repository exists and contains emojis/emojis.json and emojis/aliases.json.";
+    throw new Error(
+      `Could not fetch emoji files from GitHub "${owner}/${repo}" (branch: ${branch}). ${hint} (${detail})`,
+    );
+  }
+
+  return parseEmojiJson(emojisRaw, aliasesRaw);
+}
+
+/** Parses the raw JSON strings from either source. */
+function parseEmojiJson(
+  emojisRaw: string,
+  aliasesRaw: string,
+): {
+  emojisData: Record<string, string>;
+  aliasesData: Record<string, string[]>;
+} {
+  try {
+    return {
+      emojisData: JSON.parse(emojisRaw),
+      aliasesData: JSON.parse(aliasesRaw),
+    };
+  } catch {
     throw new Error(
       "Emoji JSON files are corrupted or invalid. Try re-downloading your emoji collection.",
     );
   }
+}
 
-  const fuseSearchList: FuseSearchable[] = [];
-  for (const name of Object.keys(emojisData)) {
-    fuseSearchList.push({
-      canonicalName: name,
-      searchTerm: name.replace(/_/g, " "),
-    });
-    if (aliasesData[name]) {
-      for (const alias of aliasesData[name]) {
-        fuseSearchList.push({
-          canonicalName: name,
-          searchTerm: alias.replace(/_/g, " "),
-        });
-      }
-    }
+/**
+ * Loads emoji data from the given source and builds the Fuse index.
+ * Results are cached — subsequent calls with the same source are instant.
+ */
+async function loadEmojiData(
+  source: EmojiSource,
+  token?: string,
+): Promise<{
+  emojisData: Record<string, string>;
+  aliasesData: Record<string, string[]>;
+  fuse: Fuse<FuseSearchable>;
+}> {
+  const key = getSourceKey(source);
+  if (cachedSourceKey === key && cachedFuse) {
+    return {
+      emojisData: cachedEmojisData,
+      aliasesData: cachedAliasesData,
+      fuse: cachedFuse,
+    };
   }
 
-  const fuse = new Fuse(fuseSearchList, {
-    keys: ["searchTerm"],
-    threshold: 0.3,
-  });
+  const { emojisData, aliasesData } =
+    source.type === "local"
+      ? await loadEmojiDataFromLocal(source.directory)
+      : await loadEmojiDataFromGitHub(
+          source.owner,
+          source.repo,
+          source.branch,
+          token,
+        );
 
-  cachedDirectoryPath = directoryPath;
+  const fuse = buildFuseIndex(emojisData, aliasesData);
+
+  cachedSourceKey = key;
   cachedEmojisData = emojisData;
   cachedAliasesData = aliasesData;
   cachedFuse = fuse;
@@ -105,7 +275,7 @@ async function loadEmojiData(directoryPath: string): Promise<{
 
 /** Clears the module-level emoji data cache, forcing a reload on the next search. */
 export function clearEmojiCache(): void {
-  cachedDirectoryPath = null;
+  cachedSourceKey = null;
   cachedEmojisData = {};
   cachedAliasesData = {};
   cachedFuse = null;
@@ -194,19 +364,22 @@ function substringMatchEmojis(
   return matches;
 }
 /**
- * Searches the emoji directory using an AI pipeline:
+ * Searches the emoji source using an AI pipeline:
  * 1. AI generates plausible emoji name candidates for the query
  * 2. Each term produces substring and fuzzy candidates
  * 3. Candidates are ranked globally across all terms
+ *
+ * Supports both local directories and public/private GitHub repositories.
  */
 export const readEmojiDirectory = async (
-  directoryPath: string,
+  source: EmojiSource,
   aiSearchTerm: string,
   ignoreList: string[] = [],
+  token?: string,
 ): Promise<emojiItem[]> => {
   if (aiSearchTerm.trim() === "") return [];
 
-  const { emojisData, aliasesData, fuse } = await loadEmojiData(directoryPath);
+  const { emojisData, aliasesData, fuse } = await loadEmojiData(source, token);
   const allEmojiNames = Object.keys(emojisData);
 
   // AI-generated emoji name candidates
@@ -271,10 +444,38 @@ export const readEmojiDirectory = async (
     `[search]   ${finalNames.slice(0, 15).join(", ")}${finalNames.length > 15 ? "..." : ""}`,
   );
 
-  return finalNames.map((name) => ({
-    emojiPath: path.join(directoryPath, "emojis", emojisData[name]),
-    keywords: [name, ...(aliasesData[name] ?? [])],
-  }));
+  const items = await Promise.all(
+    finalNames
+      .filter((name) => name in emojisData)
+      .map(async (name) => {
+        const relativePath = emojisData[name];
+        let emojiPath: string;
+        if (source.type === "local") {
+          emojiPath = path.join(source.directory, "emojis", relativePath);
+        } else if (!isValidEmojiRelativePath(relativePath)) {
+          return null;
+        } else if (token) {
+          try {
+            emojiPath = await ensureCachedEmojiImage(
+              source,
+              relativePath,
+              token,
+            );
+          } catch (err) {
+            console.error(`[cache] failed to cache ${name}:`, err);
+            emojiPath = `https://raw.githubusercontent.com/${source.owner}/${source.repo}/${source.branch}/emojis/${relativePath}`;
+          }
+        } else {
+          emojiPath = `https://raw.githubusercontent.com/${source.owner}/${source.repo}/${source.branch}/emojis/${relativePath}`;
+        }
+        return {
+          emojiPath,
+          keywords: [name, ...(aliasesData[name] ?? [])],
+        };
+      }),
+  );
+
+  return items.filter((item): item is emojiItem => item !== null);
 };
 
 /**
@@ -282,26 +483,51 @@ export const readEmojiDirectory = async (
  * Calls `onUpdate` progressively as each AI-generated term is received and searched,
  * so results appear in the UI before the AI finishes generating all candidates.
  * Falls back to the non-streaming pipeline on error.
+ * Supports both local directories and public/private GitHub repositories.
  */
 export async function searchEmojisStream(
-  directoryPath: string,
+  source: EmojiSource,
   aiSearchTerm: string,
   ignoreList: string[] = [],
   onUpdate: (emojis: emojiItem[]) => void,
+  token?: string,
 ): Promise<void> {
   if (aiSearchTerm.trim() === "") return;
 
   const t0 = Date.now();
   console.log(`[search:stream] START query="${aiSearchTerm}"`);
 
-  const { emojisData, aliasesData, fuse } = await loadEmojiData(directoryPath);
+  const { emojisData, aliasesData, fuse } = await loadEmojiData(source, token);
   const allEmojiNames = Object.keys(emojisData);
   console.log(
     `[search:stream] emoji data loaded (${Date.now() - t0}ms) emojis=${allEmojiNames.length}`,
   );
   const termMatches: EmojiTermMatches[] = [];
 
-  const processTerm = (term: string) => {
+  const buildEmojiItem = async (name: string): Promise<emojiItem | null> => {
+    const relativePath = emojisData[name];
+    if (source.type === "local") {
+      return {
+        emojiPath: path.join(source.directory, "emojis", relativePath),
+        keywords: [name, ...(aliasesData[name] ?? [])],
+      };
+    }
+    if (!isValidEmojiRelativePath(relativePath)) return null;
+    let emojiPath: string;
+    if (token) {
+      try {
+        emojiPath = await ensureCachedEmojiImage(source, relativePath, token);
+      } catch (err) {
+        console.error(`[cache] failed to cache ${name}:`, err);
+        emojiPath = `https://raw.githubusercontent.com/${source.owner}/${source.repo}/${source.branch}/emojis/${relativePath}`;
+      }
+    } else {
+      emojiPath = `https://raw.githubusercontent.com/${source.owner}/${source.repo}/${source.branch}/emojis/${relativePath}`;
+    }
+    return { emojiPath, keywords: [name, ...(aliasesData[name] ?? [])] };
+  };
+
+  const processTerm = async (term: string) => {
     const substrMatches = substringMatchEmojis(term, allEmojiNames, 5);
     const fuseResults = fuse.search(term, { limit: 5 });
     const fuseNames = fuseResults.map((r) => r.item.canonicalName);
@@ -326,12 +552,8 @@ export async function searchEmojisStream(
       `[search:stream] ranked ${finalNames.length} results after ${termMatches.length} terms`,
     );
 
-    onUpdate(
-      finalNames.map((name) => ({
-        emojiPath: path.join(directoryPath, "emojis", emojisData[name]),
-        keywords: [name, ...(aliasesData[name] ?? [])],
-      })),
-    );
+    const items = await Promise.all(finalNames.map(buildEmojiItem));
+    onUpdate(items.filter((item): item is emojiItem => item !== null));
   };
 
   try {
@@ -341,16 +563,18 @@ export async function searchEmojisStream(
       .split(/\s+/)
       .filter((w) => w.length > 1);
     for (const word of queryWords) {
-      processTerm(word);
+      await processTerm(word);
     }
 
     console.log(`[search:stream] starting AI stream... (${Date.now() - t0}ms)`);
+    let processChain = Promise.resolve();
     await streamAI(aiSearchTerm, EXTRACTION_SYSTEM_PROMPT, (term) => {
       // Skip AI terms we already searched as literal words
       if (!queryWords.includes(term)) {
-        processTerm(term);
+        processChain = processChain.then(() => processTerm(term));
       }
     });
+    await processChain;
     console.log(
       `[search:stream] DONE total=${Date.now() - t0}ms terms=${termMatches.length}`,
     );
@@ -360,9 +584,10 @@ export async function searchEmojisStream(
       error,
     );
     const emojis = await readEmojiDirectory(
-      directoryPath,
+      source,
       aiSearchTerm,
       ignoreList,
+      token,
     );
     console.log(
       `[search:stream] fallback returned ${emojis.length} results (${Date.now() - t0}ms)`,
