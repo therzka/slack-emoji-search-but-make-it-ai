@@ -42,7 +42,7 @@ your-emoji-directory/
    - **AI Provider** — choose **TypeSafe Jev (Cloud)** to enable model-based relevance checks, or leave **Local Search** selected to search without a cloud API
    - For **TypeSafe Jev**: set your TypeSafe API key. GitHub Models has been retired; your old GitHub PAT is not needed.
    - For **Local Search**: optionally set the local LLM endpoint and model for query expansion (see [Recommended Local Models](#recommended-local-models))
-   - **Ignore List** *(optional)* — comma-separated terms to filter out of results (any emoji whose name contains a matching segment is excluded)
+   - **Ignore List** _(optional)_ — comma-separated terms to filter out of results (any emoji whose name contains a matching segment is excluded)
 
 ## Usage
 
@@ -52,34 +52,37 @@ Open the **Search Slack Emojis with AI** command in Raycast. Type a phrase or de
 
 ### Keyboard Shortcuts
 
-| Shortcut | Action |
-|----------|--------|
-| **Enter** | Search with AI |
-| **⌘ V** | Paste `:emoji_name:` into the active app |
-| **⌘ C** | Copy `:emoji_name:` to clipboard |
-| **⌘ ⇧ Enter** | Copy emoji image file to clipboard |
-| **⌘ L** | Show aliases for the selected emoji |
-| **⌘ ⇧ N** | Clear results and start a new search |
-| **⌘ U** | Pull latest changes from the emoji git repo |
+| Shortcut      | Action                                      |
+| ------------- | ------------------------------------------- |
+| **Enter**     | Search with AI                              |
+| **⌘ V**       | Paste `:emoji_name:` into the active app    |
+| **⌘ C**       | Copy `:emoji_name:` to clipboard            |
+| **⌘ ⇧ Enter** | Copy emoji image file to clipboard          |
+| **⌘ L**       | Show aliases for the selected emoji         |
+| **⌘ ⇧ D**     | Show Jev search diagnostics                 |
+| **⌘ ⇧ N**     | Clear results and start a new search        |
+| **⌘ U**       | Pull latest changes from the emoji git repo |
 
 ## How It Works
 
 1. **Find candidates locally.** Search emoji names and aliases using exact, substring, and fuzzy matches ([Fuse.js](https://www.fusejs.io/)). A small set of common Slack phrases expands locally (e.g., `ship it` → `launch`, `deploy`, `rocket`).
-2. **Check relevance in Jev mode.** TypeSafe's Jev answers a separate yes/no relevance question (Noul) for each of up to 40 shortlisted emojis, in batches of no more than 20. Broader searches may take longer or cost more if they need a second request. The app displays only results with a yes probability of at least 0.70, highest first across both batches. If no candidate passes, the app shows no results. A failed request is reported separately.
+2. **Check relevance in Jev mode.** TypeSafe's Jev answers a separate yes/no relevance question (Noul) for each of up to 60 shortlisted emojis, in batches of no more than 20. Broader searches may take longer or cost more if they need extra batches. The app displays only results with a yes probability of at least 0.70, highest first across all batches. If no candidate passes, the app shows no results. A failed request is reported separately.
 3. **Stay local if preferred.** Without Jev, results use the local ranking. An optional OpenAI-compatible local model can suggest extra search terms; it does not apply the Jev relevance cutoff.
 
 Jev mode sends the submitted query and shortlisted names and aliases to TypeSafe, not images, file paths, or the full collection. Use local search for private queries or catalogs. An empty shortlist makes no API call. Jev can reject a bad match, but it can't find emojis that weren't shortlisted.
+
+After a Jev search, use **Show Search Diagnostics** to inspect shortlisted names and relevance scores, including candidates below the cutoff. The report stays in memory unless you choose **Copy Diagnostics**; it includes your query and emoji names but not your API key. **Not scored** means the relevance request did not complete.
 
 ## Recommended Local Models
 
 The AI task here is simple — generating a short list of emoji name guesses — so **small, fast models (1-4B) work great**. You don't need a large model.
 
-| Model | Ollama command | Size | Notes |
-|---|---|---|---|
-| **Llama 3.2 3B** ⭐ | `ollama pull llama3.2:3b` | ~2 GB | Best speed/quality balance. Recommended starting point. |
-| **Phi-4 Mini** | `ollama pull phi4-mini` | ~2.5 GB | Fastest option with great JSON reliability. |
-| **Qwen 3 4B** | `ollama pull qwen3:4b` | ~2.5 GB | Strong at structured output. May include `<think>` blocks (handled automatically). |
-| **Llama 3.2 1B** | `ollama pull llama3.2:1b` | ~1.3 GB | Ultra-fast but may miss cultural/slang emoji mappings. |
+| Model               | Ollama command            | Size    | Notes                                                                              |
+| ------------------- | ------------------------- | ------- | ---------------------------------------------------------------------------------- |
+| **Llama 3.2 3B** ⭐ | `ollama pull llama3.2:3b` | ~2 GB   | Best speed/quality balance. Recommended starting point.                            |
+| **Phi-4 Mini**      | `ollama pull phi4-mini`   | ~2.5 GB | Fastest option with great JSON reliability.                                        |
+| **Qwen 3 4B**       | `ollama pull qwen3:4b`    | ~2.5 GB | Strong at structured output. May include `<think>` blocks (handled automatically). |
+| **Llama 3.2 1B**    | `ollama pull llama3.2:1b` | ~1.3 GB | Ultra-fast but may miss cultural/slang emoji mappings.                             |
 
 ### Local LLM Setup (Ollama)
 
@@ -90,6 +93,7 @@ ollama serve               # start the server (if not already running)
 ```
 
 Then in extension preferences:
+
 - **AI Provider** → Local Search (Optional Local LLM)
 - **Local LLM Endpoint** → `http://localhost:11434/v1/chat/completions`
 - **Local LLM Model** → `llama3.2:3b`

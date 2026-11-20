@@ -14,6 +14,8 @@ export type emojiItem = {
   keywords: string[];
 };
 
+export type SearchDiagnostic = { name: string; score: number | null };
+
 type EmojiData = {
   emojis: Record<string, string>;
   aliases: Record<string, string[]>;
@@ -92,7 +94,46 @@ const REACTION_TERMS = [
   ],
   [/\b(celebrat\w*|congrats|we did it)\b/, ["party", "tada", "confetti"]],
   [/\b(holy moly|wow|mind blown)\b/, ["surprised", "mind blown", "shocked"]],
+  [
+    /\b(love|loves|loving|loved|adore|crush)\b/,
+    ["love", "heart", "hearts", "hug", "kiss", "blush", "aww"],
+  ],
+  [/\b(sad|cry|crying|cried|sob|tears)\b/, ["sad", "cry", "sob", "tears"]],
+  [/\b(happy|joy|excited|yay)\b/, ["happy", "joy", "party", "yay"]],
+  [/\b(angry|mad|rage|furious)\b/, ["angry", "mad", "rage", "tableflip"]],
+  [/\b(laugh|lol|funny|haha|lmao)\b/, ["laugh", "lol", "lmao", "rofl"]],
+  [/\b(thanks|thank|grateful)\b/, ["thanks", "thank", "heart", "pray"]],
+  [/\b(sorry|apologize|oops)\b/, ["sorry", "oops", "sweat"]],
+  [/\b(yes|agree|yep|yeah)\b/, ["yes", "thumbs up", "check", "nod"]],
+  [/\b(no|nope|disagree|nah)\b/, ["no", "nope", "thumbs down", "x"]],
+  [/\b(confused|wat|huh)\b/, ["confused", "thinking", "wat", "shrug"]],
+  [/\b(tired|sleepy|exhausted)\b/, ["tired", "sleep", "yawn"]],
+  [
+    /\b(panic|stress|help|scream)\b/,
+    ["panic", "scream", "this is fine", "sweat"],
+  ],
+  [/\b(bye|goodbye|cya)\b/, ["bye", "wave"]],
 ] as const;
+
+function stemVariants(word: string): string[] {
+  const variants: string[] = [];
+  if (word.endsWith("ies") && word.length > 4) {
+    variants.push(`${word.slice(0, -3)}y`);
+  } else if (word.endsWith("s") && !word.endsWith("ss") && word.length > 3) {
+    variants.push(word.slice(0, -1));
+  }
+  if (word.endsWith("ing") && word.length > 5) {
+    const base = word.slice(0, -3);
+    variants.push(base, `${base}e`);
+    if (base.length >= 2 && base.at(-1) === base.at(-2)) {
+      variants.push(base.slice(0, -1));
+    }
+  } else if (word.endsWith("ed") && word.length > 4) {
+    const base = word.slice(0, -2);
+    variants.push(base, `${base}e`);
+  }
+  return variants;
+}
 const STOP_WORDS = new Set(
   "a am an and are as at be for from how i in is it me my of on or that the this to was we with you".split(
     " ",
@@ -104,7 +145,12 @@ type SearchOptions = {
   ignoreList?: string[];
   signal?: AbortSignal;
 } & (
-  | { mode: "jev"; apiKey: string; judge?: typeof judgeEmojiRelevance }
+  | {
+      mode: "jev";
+      apiKey: string;
+      judge?: typeof judgeEmojiRelevance;
+      onDiagnostics?: (diagnostics: SearchDiagnostic[]) => void;
+    }
   | { mode: "local"; model?: LocalModel }
 );
 
@@ -123,19 +169,42 @@ export async function searchEmojis(
   const seen = new Set<string>();
   const matchLimit = options.mode === "jev" ? JEV_CANDIDATE_LIMIT : 5;
 
+  const queryTerms = new Set<string>();
+  const rawWords = normalized.split(" ").slice(0, 20);
+  for (const word of rawWords) {
+    if (word.length > 1 && !STOP_WORDS.has(word)) {
+      queryTerms.add(word);
+      for (const variant of stemVariants(word)) queryTerms.add(variant);
+    }
+  }
+  for (const [pattern, terms] of REACTION_TERMS) {
+    if (pattern.test(normalized)) {
+      for (const term of terms) queryTerms.add(term);
+    }
+  }
+
   const addTerm = (value: string) => {
     const term = normalize(value);
     if (!term || seen.has(term)) return;
     seen.add(term);
 
-    const substringMatches = new Set<string>();
+    const scored = new Map<string, number>();
     for (const { name, term: label } of data.names) {
-      if (label === term) substringMatches.add(name);
+      if (label !== term && !label.includes(term)) continue;
+      let score = label === term ? 100 : 10;
+      const labelWords = label.split(" ");
+      for (const qt of queryTerms) {
+        if (labelWords.includes(qt)) score += 20;
+        else if (label.includes(qt)) score += 8;
+      }
+      score -= label.length * 0.01;
+      const prev = scored.get(name);
+      if (prev === undefined || score > prev) scored.set(name, score);
     }
-    for (const { name, term: label } of data.names) {
-      if (substringMatches.size >= matchLimit) break;
-      if (label.includes(term)) substringMatches.add(name);
-    }
+    const substringMatches = [...scored.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, matchLimit)
+      .map(([name]) => name);
     const fuseMatches = [
       ...new Set(
         data.fuse
@@ -145,18 +214,13 @@ export async function searchEmojis(
     ].slice(0, matchLimit);
     termMatches.push({
       term,
-      substringMatches: [...substringMatches].slice(0, matchLimit),
+      substringMatches,
       fuseMatches,
     });
   };
 
   addTerm(normalized);
-  for (const word of normalized.split(" ").slice(0, 20)) {
-    if (word.length > 1 && !STOP_WORDS.has(word)) addTerm(word);
-  }
-  for (const [pattern, terms] of REACTION_TERMS) {
-    if (pattern.test(normalized)) terms.forEach(addTerm);
-  }
+  for (const qt of queryTerms) addTerm(qt);
 
   const shortlist = () =>
     rankEmojiMatches(termMatches, {
@@ -179,11 +243,18 @@ export async function searchEmojis(
       name,
       aliases: data.aliases[name] ?? [],
     }));
+    options.onDiagnostics?.(
+      candidates.map(({ name }) => ({ name, score: null })),
+    );
     publish(
       candidates.length
         ? await (options.judge ?? judgeEmojiRelevance)(query, candidates, {
             apiKey: options.apiKey,
             signal,
+            onDecisions: (decisions) => {
+              signal.throwIfAborted();
+              options.onDiagnostics?.(decisions);
+            },
           })
         : [],
     );

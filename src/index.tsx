@@ -10,10 +10,16 @@ import {
   Icon,
 } from "@raycast/api";
 import fs from "fs";
-import { emojiItem, clearEmojiCache, searchEmojis } from "./utils";
+import {
+  emojiItem,
+  clearEmojiCache,
+  searchEmojis,
+  type SearchDiagnostic,
+} from "./utils";
 import { warmUpLocalLLM } from "./ai";
 import { runGitPull } from "./utils/runGitPull";
 import { AliasList } from "./components/AliasList";
+import { SearchDiagnostics } from "./components/SearchDiagnostics";
 
 export default function Command() {
   const {
@@ -29,6 +35,8 @@ export default function Command() {
   const [isLoading, setIsLoading] = useState(false);
   const [submittedSearchText, setSubmittedSearchText] = useState("");
   const [searchCounter, setSearchCounter] = useState(0);
+  const [searchError, setSearchError] = useState<string>();
+  const [diagnostics, setDiagnostics] = useState<SearchDiagnostic[]>();
   const isJev = aiProvider === "jev";
 
   useEffect(() => {
@@ -53,11 +61,15 @@ export default function Command() {
     if (submittedSearchText.trim() === "") {
       setEmojis([]);
       setIsLoading(false);
+      setSearchError(undefined);
+      setDiagnostics(undefined);
       return;
     }
 
     setIsLoading(true);
     setEmojis([]);
+    setSearchError(undefined);
+    setDiagnostics(undefined);
     const controller = new AbortController();
     const { signal } = controller;
     const parsedIgnoreList = ignoreList
@@ -81,7 +93,14 @@ export default function Command() {
         emojiDirectory,
         submittedSearchText,
         isJev
-          ? { ...shared, mode: "jev", apiKey: typesafeApiKey ?? "" }
+          ? {
+              ...shared,
+              mode: "jev",
+              apiKey: typesafeApiKey ?? "",
+              onDiagnostics: (value) => {
+                if (!signal.aborted) setDiagnostics(value);
+              },
+            }
           : {
               ...shared,
               mode: "local",
@@ -108,12 +127,14 @@ export default function Command() {
       })
       .catch((error: unknown) => {
         if (signal.aborted) return;
+        const message = error instanceof Error ? error.message : String(error);
+        if (lastEmojis.length === 0) setSearchError(message);
         showToast(
           Toast.Style.Failure,
           lastEmojis.length
             ? "Local AI search failed; showing local matches"
             : "Emoji search failed",
-          error instanceof Error ? error.message : String(error),
+          message,
         );
       })
       .finally(() => {
@@ -135,6 +156,8 @@ export default function Command() {
     setSearchText("");
     setSubmittedSearchText("");
     setEmojis([]);
+    setSearchError(undefined);
+    setDiagnostics(undefined);
   };
 
   const updateEmojiRepo = async () => {
@@ -169,6 +192,8 @@ export default function Command() {
       return;
     }
 
+    setSearchError(undefined);
+    setIsLoading(true);
     setSubmittedSearchText(trimmedSearchText);
     setSearchCounter((c) => c + 1);
   };
@@ -180,6 +205,41 @@ export default function Command() {
       shortcut={{ modifiers: ["cmd"], key: "u" }}
       onAction={updateEmojiRepo}
     />
+  );
+
+  const DiagnosticsAction = () =>
+    diagnostics && submittedSearchText ? (
+      <Action.Push
+        title="Show Search Diagnostics"
+        icon={Icon.List}
+        shortcut={{ modifiers: ["cmd", "shift"], key: "d" }}
+        target={
+          <SearchDiagnostics
+            query={submittedSearchText}
+            diagnostics={diagnostics}
+          />
+        }
+      />
+    ) : null;
+
+  const GlobalActions = () => (
+    <ActionPanel>
+      <Action
+        title="Search Emojis"
+        icon={Icon.MagnifyingGlass}
+        onAction={handleSubmitSearch}
+      />
+      {submittedSearchText && (
+        <Action
+          title="New Search"
+          icon={Icon.ArrowCounterClockwise}
+          shortcut={{ modifiers: ["cmd", "shift"], key: "n" }}
+          onAction={handleClearSearch}
+        />
+      )}
+      <DiagnosticsAction />
+      <UpdateRepoAction />
+    </ActionPanel>
   );
 
   const navigationTitle = submittedSearchText
@@ -200,31 +260,35 @@ export default function Command() {
       filtering={false}
       isLoading={isLoading}
       searchBarPlaceholder="Type a feeling and press Enter to search..."
-      actions={
-        // Global actions for the Grid
-        <ActionPanel>
-          <Action
-            title="Search Emojis"
-            icon={Icon.MagnifyingGlass}
-            onAction={handleSubmitSearch}
-          />
-          {submittedSearchText && (
-            <Action
-              title="New Search"
-              icon={Icon.ArrowCounterClockwise}
-              shortcut={{ modifiers: ["cmd", "shift"], key: "n" }}
-              onAction={handleClearSearch}
-            />
-          )}
-          <UpdateRepoAction />
-        </ActionPanel>
-      }
+      actions={<GlobalActions />}
     >
-      {searchText.length === 0 && emojis.length === 0 && !isLoading ? (
+      {emojis.length === 0 && !submittedSearchText ? (
         <Grid.EmptyView
           icon={{ source: "bufo-offers-you-the-best-emoji-culture-ever.png" }}
           title="Type a feeling or phrase to search emojis with AI"
           description="Press Enter to search with AI"
+          actions={<GlobalActions />}
+        />
+      ) : emojis.length === 0 && isLoading ? (
+        <Grid.EmptyView
+          icon={Icon.MagnifyingGlass}
+          title="Searching for emojis"
+          description="Looking for matches to your search."
+          actions={<GlobalActions />}
+        />
+      ) : emojis.length === 0 && searchError ? (
+        <Grid.EmptyView
+          icon={Icon.ExclamationMark}
+          title="Emoji search failed"
+          description={searchError}
+          actions={<GlobalActions />}
+        />
+      ) : emojis.length === 0 ? (
+        <Grid.EmptyView
+          icon={Icon.MagnifyingGlass}
+          title="No matching emojis yet"
+          description="Try a shorter phrase, a different word, or an emoji name."
+          actions={<GlobalActions />}
         />
       ) : (
         emojis.map((emoji) => (
@@ -284,6 +348,7 @@ export default function Command() {
                     target={<AliasList emoji={emoji} />}
                   />
                 )}
+                <DiagnosticsAction />
                 <Action
                   title="New Search"
                   icon={Icon.ArrowCounterClockwise}

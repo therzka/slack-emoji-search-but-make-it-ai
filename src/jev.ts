@@ -1,15 +1,16 @@
 import { requestSignal } from "./utils/requestSignal";
 
 const JEV_URL = "https://api.typesafe.ai/v1/systemone";
-const MIN_RELEVANCE = 0.7;
+export const MIN_RELEVANCE = 0.7;
 const JEV_BATCH_SIZE = 20;
-export const JEV_CANDIDATE_LIMIT = 40;
+export const JEV_CANDIDATE_LIMIT = 60;
 
 type Candidate = { name: string; aliases: string[] };
 type JudgeOptions = {
   apiKey: string;
   signal?: AbortSignal;
   fetch?: typeof fetch;
+  onDecisions?: (decisions: Decision[]) => void;
 };
 type Decision = { name: string; score: number };
 
@@ -24,19 +25,22 @@ export async function judgeEmojiRelevance(
   if (!apiKey)
     throw new Error("Set a TypeSafe API key in extension preferences.");
 
-  const decisions: Decision[] = [];
+  const batches: Candidate[][] = [];
   for (let offset = 0; offset < shortlist.length; offset += JEV_BATCH_SIZE) {
-    decisions.push(
-      ...(await judgeBatch(
-        query,
-        shortlist.slice(offset, offset + JEV_BATCH_SIZE),
-        {
+    batches.push(shortlist.slice(offset, offset + JEV_BATCH_SIZE));
+  }
+  const decisions = (
+    await Promise.all(
+      batches.map((batch) =>
+        judgeBatch(query, batch, {
           ...options,
           apiKey,
-        },
-      )),
-    );
-  }
+        }),
+      ),
+    )
+  ).flat();
+  options.signal?.throwIfAborted();
+  options.onDecisions?.(decisions);
   return decisions
     .filter(({ score }) => score >= MIN_RELEVANCE)
     .sort((a, b) => b.score - a.score)
