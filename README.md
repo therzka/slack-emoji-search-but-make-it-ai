@@ -15,9 +15,8 @@ A [Raycast](https://raycast.com) extension that semantically searches a local Sl
 
 - [Raycast](https://raycast.com) installed
 - A local directory of Slack emojis with the expected structure (see below)
-- **One of:**
-  - A GitHub Personal Access Token (PAT) with the `models:read` scope — [create one here](https://github.com/settings/tokens)
-  - A local LLM server (e.g. [Ollama](https://ollama.com)) with a small model installed (see [Recommended Local Models](#recommended-local-models))
+- For cloud relevance decisions: a [TypeSafe API key](https://docs.typesafe.ai/introduction/quickstart)
+- Optional for offline query expansion: a local LLM server such as [Ollama](https://ollama.com) (see [Recommended Local Models](#recommended-local-models))
 
 ### Expected Emoji Directory Structure
 
@@ -40,14 +39,14 @@ your-emoji-directory/
 2. Install and open this extension in Raycast
 3. In extension preferences, set:
    - **Emoji Directory** — path to your emoji directory
-   - **AI Provider** — GitHub Models (cloud) or Local LLM
-   - For **GitHub Models**: set your GitHub PAT and optionally choose a model (defaults to GPT-5 mini)
-   - For **Local LLM**: set the endpoint URL and model name (see [Recommended Local Models](#recommended-local-models))
+   - **AI Provider** — choose **TypeSafe Jev (Cloud)** to enable model-based relevance checks, or leave **Local Search** selected to search without a cloud API
+   - For **TypeSafe Jev**: set your TypeSafe API key. GitHub Models has been retired; your old GitHub PAT is not needed.
+   - For **Local Search**: optionally set the local LLM endpoint and model for query expansion (see [Recommended Local Models](#recommended-local-models))
    - **Ignore List** *(optional)* — comma-separated terms to filter out of results (any emoji whose name contains a matching segment is excluded)
 
 ## Usage
 
-Open the **Search Slack Emojis with AI** command in Raycast. Type a phrase or describe a feeling and press **Enter** to search. Results stream in progressively as the AI generates candidates.
+Open the **Search Slack Emojis with AI** command in Raycast. Type a phrase or describe a feeling and press **Enter** to search. Jev results appear after the relevance check; local results appear immediately and update progressively if a local model is configured.
 
 **Example queries:** "celebrating a win", "i hate meetings", "holy moly", "lgtm", "ship it"
 
@@ -65,15 +64,11 @@ Open the **Search Slack Emojis with AI** command in Raycast. Type a phrase or de
 
 ## How It Works
 
-The extension uses a two-stage AI search pipeline:
+1. **Find candidates locally.** Search emoji names and aliases using exact, substring, and fuzzy matches ([Fuse.js](https://www.fusejs.io/)). A small set of common Slack phrases expands locally (e.g., `ship it` → `launch`, `deploy`, `rocket`).
+2. **Check relevance in Jev mode.** TypeSafe's Jev answers a separate yes/no relevance question (Noul) for each of up to 40 shortlisted emojis, in batches of no more than 20. Broader searches may take longer or cost more if they need a second request. The app displays only results with a yes probability of at least 0.70, highest first across both batches. If no candidate passes, the app shows no results. A failed request is reported separately.
+3. **Stay local if preferred.** Without Jev, results use the local ranking. An optional OpenAI-compatible local model can suggest extra search terms; it does not apply the Jev relevance cutoff.
 
-1. **Literal + AI candidate generation** — Your query words are searched directly (important for acronyms like "lgtm"), then AI generates 10–15 additional plausible emoji name fragments (e.g., "i hate meetings" → `["facepalm", "eye-roll", "calendar-fire", "frustrated", ...]`)
-2. **Local search** — Each candidate is matched against your emoji collection using both substring matching and fuzzy search ([Fuse.js](https://www.fusejs.io/))
-3. **Global ranking** — All matches are scored across candidates, with a boost for emojis that share words with your original query
-
-Results stream in progressively — you'll see matches appear as the AI generates each term, rather than waiting for all candidates.
-
-Supports both [GitHub Models](https://github.com/marketplace/models) (cloud) and local OpenAI-compatible LLM servers (Ollama, LM Studio, etc.).
+Jev mode sends the submitted query and shortlisted names and aliases to TypeSafe, not images, file paths, or the full collection. Use local search for private queries or catalogs. An empty shortlist makes no API call. Jev can reject a bad match, but it can't find emojis that weren't shortlisted.
 
 ## Recommended Local Models
 
@@ -95,7 +90,7 @@ ollama serve               # start the server (if not already running)
 ```
 
 Then in extension preferences:
-- **AI Provider** → Local LLM
+- **AI Provider** → Local Search (Optional Local LLM)
 - **Local LLM Endpoint** → `http://localhost:11434/v1/chat/completions`
 - **Local LLM Model** → `llama3.2:3b`
 

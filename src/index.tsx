@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Grid,
   ActionPanel,
@@ -10,7 +10,7 @@ import {
   Icon,
 } from "@raycast/api";
 import fs from "fs";
-import { emojiItem, clearEmojiCache, searchEmojisStream } from "./utils";
+import { emojiItem, clearEmojiCache, searchEmojis } from "./utils";
 import { warmUpLocalLLM } from "./ai";
 import { runGitPull } from "./utils/runGitPull";
 import { AliasList } from "./components/AliasList";
@@ -18,7 +18,7 @@ import { AliasList } from "./components/AliasList";
 export default function Command() {
   const {
     emojiDirectory,
-    githubToken,
+    typesafeApiKey,
     ignoreList,
     aiProvider,
     localEndpoint,
@@ -29,8 +29,7 @@ export default function Command() {
   const [isLoading, setIsLoading] = useState(false);
   const [submittedSearchText, setSubmittedSearchText] = useState("");
   const [searchCounter, setSearchCounter] = useState(0);
-  const searchIdRef = useRef(0);
-  const hasWarmedUpRef = useRef(false);
+  const isJev = aiProvider === "jev";
 
   useEffect(() => {
     if (!emojiDirectory || !fs.existsSync(emojiDirectory)) {
@@ -41,50 +40,26 @@ export default function Command() {
       );
       return;
     }
-    if ((aiProvider || "github") === "local") {
-      if (!localEndpoint) {
-        showToast(
-          Toast.Style.Failure,
-          "Local LLM endpoint not set",
-          "Add a local LLM endpoint URL in extension preferences.",
-        );
-        return;
-      }
-      if (!localModel) {
-        showToast(
-          Toast.Style.Failure,
-          "Local LLM model not set",
-          "Add a local model name in extension preferences.",
-        );
-        return;
-      }
-    } else {
-      if (!githubToken) {
-        showToast(
-          Toast.Style.Failure,
-          "GitHub token not set",
-          "Add a GitHub PAT with models:read scope in extension preferences.",
-        );
-        return;
-      }
+    if (!isJev && localEndpoint && localModel) {
+      warmUpLocalLLM({ endpoint: localEndpoint, model: localModel }).catch(
+        (error: unknown) => {
+          console.warn("Local LLM warm-up failed:", error);
+        },
+      );
     }
-
-    // Pre-warm local LLM once on mount so the model is loaded before the first search
-    if (!hasWarmedUpRef.current && (aiProvider || "github") === "local") {
-      hasWarmedUpRef.current = true;
-      warmUpLocalLLM();
-    }
-  }, [emojiDirectory, githubToken, aiProvider, localEndpoint, localModel]);
+  }, [emojiDirectory, isJev, localEndpoint, localModel]);
 
   useEffect(() => {
     if (submittedSearchText.trim() === "") {
       setEmojis([]);
+      setIsLoading(false);
       return;
     }
 
     setIsLoading(true);
     setEmojis([]);
-    const searchId = ++searchIdRef.current;
+    const controller = new AbortController();
+    const { signal } = controller;
     const parsedIgnoreList = ignoreList
       ? ignoreList
           .split(",")
@@ -92,32 +67,69 @@ export default function Command() {
           .filter(Boolean)
       : [];
     let lastEmojis: emojiItem[] = [];
-    searchEmojisStream(
-      emojiDirectory,
-      submittedSearchText,
-      parsedIgnoreList,
-      (emojis) => {
-        if (searchId !== searchIdRef.current) return;
-        lastEmojis = emojis;
-        setEmojis(emojis);
-      },
-    )
+    const runSearch = async () => {
+      if (isJev && !typesafeApiKey?.trim()) {
+        throw new Error("Set a TypeSafe API key in extension preferences.");
+      }
+      if (!isJev && Boolean(localEndpoint) !== Boolean(localModel)) {
+        throw new Error(
+          "Set both the local LLM endpoint and model, or leave both empty.",
+        );
+      }
+      const shared = { ignoreList: parsedIgnoreList, signal };
+      await searchEmojis(
+        emojiDirectory,
+        submittedSearchText,
+        isJev
+          ? { ...shared, mode: "jev", apiKey: typesafeApiKey ?? "" }
+          : {
+              ...shared,
+              mode: "local",
+              model:
+                localEndpoint && localModel
+                  ? { endpoint: localEndpoint, model: localModel }
+                  : undefined,
+            },
+        (emojis) => {
+          lastEmojis = emojis;
+          setEmojis(emojis);
+        },
+      );
+    };
+    runSearch()
       .then(() => {
-        if (searchId !== searchIdRef.current) return;
+        if (signal.aborted) return;
         if (lastEmojis.length === 0) {
-          showToast(Toast.Style.Animated, "No emojis found for your query.");
+          showToast(
+            Toast.Style.Success,
+            isJev ? "No relevant emojis found" : "No emojis found",
+          );
         }
       })
-      .catch((err) => {
-        if (searchId !== searchIdRef.current) return;
-        showToast(Toast.Style.Failure, "Could not load emojis", err.message);
-        setEmojis([]);
+      .catch((error: unknown) => {
+        if (signal.aborted) return;
+        showToast(
+          Toast.Style.Failure,
+          lastEmojis.length
+            ? "Local AI search failed; showing local matches"
+            : "Emoji search failed",
+          error instanceof Error ? error.message : String(error),
+        );
       })
       .finally(() => {
-        if (searchId !== searchIdRef.current) return;
-        setIsLoading(false);
+        if (!signal.aborted) setIsLoading(false);
       });
-  }, [emojiDirectory, submittedSearchText, searchCounter]);
+    return () => controller.abort();
+  }, [
+    emojiDirectory,
+    submittedSearchText,
+    searchCounter,
+    ignoreList,
+    isJev,
+    typesafeApiKey,
+    localEndpoint,
+    localModel,
+  ]);
 
   const handleClearSearch = () => {
     setSearchText("");

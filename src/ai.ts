@@ -1,362 +1,117 @@
-import { getPreferenceValues } from "@raycast/api";
+import { requestSignal } from "./utils/requestSignal";
 
-const GITHUB_MODELS_URL = "https://models.github.ai/inference/chat/completions";
-const STREAM_TIMEOUT_MS = 60_000;
+export { JEV_CANDIDATE_LIMIT, judgeEmojiRelevance } from "./jev";
 
-interface ChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
+export type LocalModel = { endpoint: string; model: string };
+
+const EXTRACTION_PROMPT = `Find emojis in a Slack custom emoji collection. Given a phrase,
+return only a JSON array of 10–15 plausible emoji name fragments. Think of
+reactions, emotions, objects, memes, compound names, and slang. Translate
+idioms into reactions, not just literal words. For example, "are you kidding
+me?" could match ["facepalm", "bruh", "eye-roll", "disbelief"].`;
+
+export async function warmUpLocalLLM({
+  endpoint,
+  model,
+}: LocalModel): Promise<void> {
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: "user", content: "hi" }],
+      max_tokens: 1,
+      keep_alive: "30m",
+    }),
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!response.ok)
+    throw new Error(`Local LLM warm-up failed (HTTP ${response.status}).`);
+  await response.text();
 }
 
-interface ChatCompletionResponse {
-  choices: { message: { content: string } }[];
-}
-
-interface AIPreferences {
-  aiProvider: string;
-  githubToken: string;
-  aiModel: string;
-  localEndpoint: string;
-  localModel: string;
-}
-
-function resolveProvider(prefs: AIPreferences): {
-  provider: "github" | "local";
-  model: string;
-  url: string;
-  token?: string;
-} {
-  const provider =
-    (prefs.aiProvider || "github") === "local" ? "local" : "github";
-  const model =
-    provider === "local"
-      ? prefs.localModel || "(unset)"
-      : prefs.aiModel || "openai/gpt-5-mini";
-  const url = provider === "local" ? prefs.localEndpoint : GITHUB_MODELS_URL;
-  return {
-    provider,
-    model,
-    url,
-    token: provider === "github" ? prefs.githubToken : undefined,
-  };
-}
-
-/**
- * Fires a minimal background request to the local LLM to force it to load into memory.
- * Runs to completion so the model is fully loaded when the first real search arrives.
- */
-export async function warmUpLocalLLM(): Promise<void> {
-  const prefs = getPreferenceValues<AIPreferences>();
-  const { provider, url, model } = resolveProvider(prefs);
-  if (provider !== "local" || !url || !model || model === "(unset)") return;
-
-  try {
-    console.log("[ai] warming up local LLM...");
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: "hi" }],
-        max_tokens: 1,
-        stream: false,
-        keep_alive: "30m",
-      }),
-    });
-    console.log(`[ai] warmup complete (status ${response.status})`);
-  } catch {
-    // Ignore warmup failures — the real search will surface any real errors
-  }
-}
-
-/**
- * Sends a prompt to the configured AI provider and returns the assistant's response text.
- * Supports GitHub Models (cloud) and local OpenAI-compatible LLM servers (e.g. Ollama, LM Studio).
- */
-export async function askAI(prompt: string, system?: string): Promise<string> {
-  const prefs = getPreferenceValues<AIPreferences>();
-  const { provider, model, url, token } = resolveProvider(prefs);
-  console.log(`[ai] provider=${provider} model=${model}`);
-
-  const messages: ChatMessage[] = [];
-  if (system) messages.push({ role: "system", content: system });
-  messages.push({ role: "user", content: prompt });
-
-  if (provider === "local") {
-    return callLocalLLM(url, model, messages);
-  }
-  return callGitHubModels(token ?? "", model, messages);
-}
-
-/**
- * Streams a prompt to the configured AI provider, calling `onTerm` for each string item
- * extracted from the JSON array as it streams in.
- * Includes a 30-second timeout and detailed diagnostic logging.
- */
-export async function streamAI(
-  prompt: string,
-  system: string | undefined,
+export async function streamLocalTerms(
+  query: string,
+  { endpoint, model }: LocalModel,
   onTerm: (term: string) => void,
+  parentSignal: AbortSignal,
 ): Promise<void> {
-  const prefs = getPreferenceValues<AIPreferences>();
-  const { provider, model, url, token } = resolveProvider(prefs);
-  const t0 = Date.now();
-
-  console.log(
-    `[ai:stream] START provider=${provider} model=${model} url=${url}`,
-  );
-
-  if (!url) throw new Error("AI endpoint is not configured.");
-
-  const messages: ChatMessage[] = [];
-  if (system) messages.push({ role: "system", content: system });
-  messages.push({ role: "user", content: prompt });
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-  if (provider === "github") {
-    if (!token) throw new Error("GitHub token is not configured.");
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
-  const abort = new AbortController();
-  const timeout = setTimeout(() => {
-    console.log(`[ai:stream] TIMEOUT after ${STREAM_TIMEOUT_MS}ms — aborting`);
-    abort.abort();
-  }, STREAM_TIMEOUT_MS);
-
-  let response: Response;
+  const { signal, dispose } = requestSignal(60_000, parentSignal);
   try {
-    console.log(`[ai:stream] fetching... (${Date.now() - t0}ms)`);
-    response = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model,
-        messages,
-        stream: true,
-        ...(provider === "local" && { keep_alive: "30m" }),
-      }),
-      signal: abort.signal,
-    });
-    console.log(
-      `[ai:stream] response headers arrived (${Date.now() - t0}ms) status=${response.status} content-type=${response.headers.get("content-type")}`,
-    );
-  } catch (error) {
-    clearTimeout(timeout);
-    const elapsed = Date.now() - t0;
-    if (abort.signal.aborted) {
-      throw new Error(
-        `AI request timed out after ${elapsed}ms. Is your local LLM server running?`,
-      );
-    }
-    throw new Error(
-      `AI fetch failed after ${elapsed}ms: ${error instanceof Error ? error.message : error}`,
-    );
+    await readLocalTerms(query, { endpoint, model }, onTerm, signal);
+  } finally {
+    dispose();
   }
+}
 
-  if (!response.ok) {
-    clearTimeout(timeout);
-    const body = await response.text().catch(() => "");
-    if (response.status === 401)
-      throw new Error(
-        "GitHub token is invalid or missing the models:read scope.",
-      );
-    if (response.status === 429)
-      throw new Error(
-        "GitHub Models rate limit exceeded. Please try again in a moment.",
-      );
-    throw new Error(`AI API error (${response.status}): ${body}`);
-  }
-
-  if (!response.body) {
-    clearTimeout(timeout);
-    throw new Error("Streaming response body is null.");
-  }
+async function readLocalTerms(
+  query: string,
+  { endpoint, model }: LocalModel,
+  onTerm: (term: string) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: EXTRACTION_PROMPT },
+        { role: "user", content: query },
+      ],
+      stream: true,
+      keep_alive: "30m",
+    }),
+    signal,
+  });
+  if (!response.ok)
+    throw new Error(`Local LLM request failed (HTTP ${response.status}).`);
+  if (!response.body) throw new Error("Local LLM returned no response stream.");
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  let sseBuffer = "";
-  let contentBuffer = "";
-  let termsFound = 0;
-  let chunksReceived = 0;
-  let dataLinesLogged = 0;
-
+  let buffer = "";
+  let content = "";
+  let termsRead = 0;
   try {
-    let streaming = true;
-    while (streaming) {
+    for (;;) {
       const { done, value } = await reader.read();
-      if (done) {
-        console.log(
-          `[ai:stream] stream ended (done=true) (${Date.now() - t0}ms) chunks=${chunksReceived} terms=${termsFound}`,
-        );
-        break;
-      }
-
-      chunksReceived++;
-      const chunk = decoder.decode(value, { stream: true });
-
-      if (chunksReceived === 1) {
-        console.log(
-          `[ai:stream] first chunk arrived (${Date.now() - t0}ms) length=${chunk.length}`,
-        );
-        console.log(
-          `[ai:stream] first chunk preview: ${JSON.stringify(chunk.slice(0, 200))}`,
-        );
-      }
-
-      sseBuffer += chunk;
-      const lines = sseBuffer.split("\n");
-      sseBuffer = lines.pop() ?? "";
-
+      buffer += decoder.decode(value, { stream: !done });
+      const lines = buffer.split("\n");
+      buffer = done ? "" : (lines.pop() ?? "");
       for (const line of lines) {
-        if (!line.startsWith("data: ") && !line.startsWith("data:")) continue;
-        const data = line.replace(/^data:\s*/, "").trim();
-        if (data === "[DONE]") {
-          console.log(
-            `[ai:stream] [DONE] received (${Date.now() - t0}ms) terms=${termsFound}`,
-          );
-          streaming = false;
-          break;
+        if (!line.startsWith("data:")) continue;
+        const event = line.slice(5).trim();
+        if (event === "[DONE]") {
+          if (!termsRead)
+            throw new Error("Local LLM returned no search terms.");
+          return;
         }
-
-        // Log first few raw SSE data lines for format debugging
-        if (dataLinesLogged < 3) {
-          console.log(
-            `[ai:stream] raw data line #${dataLinesLogged}: ${JSON.stringify(data.slice(0, 200))}`,
-          );
-          dataLinesLogged++;
-        }
-
-        let parsed: { choices?: { delta?: { content?: string } }[] };
-        try {
-          parsed = JSON.parse(data);
-        } catch {
-          if (dataLinesLogged <= 3) {
-            console.log(
-              `[ai:stream] failed to parse SSE data: ${JSON.stringify(data.slice(0, 100))}`,
-            );
-          }
-          continue;
-        }
-
-        const delta = parsed.choices?.[0]?.delta?.content ?? "";
-        if (!delta) continue;
-        contentBuffer += delta;
-
-        // Only look for terms after the JSON array's opening '[' to skip <think> blocks etc.
-        const arrayStart = contentBuffer.indexOf("[");
-        if (arrayStart === -1) continue;
-        const arrayContent = contentBuffer.slice(arrayStart + 1);
-
-        const matches = [...arrayContent.matchAll(/"((?:[^"\\]|\\.)*)"/g)];
-        while (termsFound < matches.length) {
-          const term = matches[termsFound][1].trim().toLowerCase();
-          if (term) {
-            console.log(
-              `[ai:stream] term #${termsFound}: "${term}" (${Date.now() - t0}ms)`,
-            );
-            onTerm(term);
-          }
-          termsFound++;
+        if (!event) continue;
+        const data: { choices?: { delta?: { content?: string } }[] } =
+          JSON.parse(event);
+        content += data.choices?.[0]?.delta?.content ?? "";
+        const text = content.replace(/<think>[\s\S]*?<\/think>/gi, "");
+        if (/<think>/i.test(text)) continue;
+        const start = text.indexOf("[");
+        if (start < 0) continue;
+        const entries = text
+          .slice(start + 1)
+          .matchAll(/"((?:[^"\\]|\\.)*)"|(\])/g);
+        let index = 0;
+        for (const entry of entries) {
+          if (entry[2] || index >= 15) break;
+          if (index++ < termsRead) continue;
+          const term: string = JSON.parse(entry[0]);
+          if (term.trim()) onTerm(term.trim());
+          termsRead++;
         }
       }
+      if (done) break;
     }
+    if (!termsRead) throw new Error("Local LLM returned no search terms.");
   } finally {
-    clearTimeout(timeout);
+    await reader.cancel().catch(() => undefined);
     reader.releaseLock();
-    console.log(
-      `[ai:stream] DONE total=${Date.now() - t0}ms chunks=${chunksReceived} terms=${termsFound} contentLength=${contentBuffer.length}`,
-    );
-    console.log(`[ai:stream] full response: ${JSON.stringify(contentBuffer)}`);
-    if (termsFound === 0 && contentBuffer.length > 0) {
-      console.log(
-        `[ai:stream] WARNING: received content but extracted 0 terms. Full content: ${JSON.stringify(contentBuffer.slice(0, 500))}`,
-      );
-    }
   }
-}
-
-async function callGitHubModels(
-  token: string,
-  aiModel: string,
-  messages: ChatMessage[],
-): Promise<string> {
-  const model = aiModel || "openai/gpt-5-mini";
-
-  const response = await fetch(GITHUB_MODELS_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ model, messages }),
-  });
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    if (response.status === 401) {
-      throw new Error(
-        "GitHub token is invalid or missing the models:read scope.",
-      );
-    }
-    if (response.status === 429) {
-      throw new Error(
-        "GitHub Models rate limit exceeded. Please try again in a moment.",
-      );
-    }
-    throw new Error(`GitHub Models API error (${response.status}): ${body}`);
-  }
-
-  const data = (await response.json()) as ChatCompletionResponse;
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error("GitHub Models API returned an empty response.");
-  }
-
-  return content;
-}
-
-async function callLocalLLM(
-  endpoint: string,
-  model: string,
-  messages: ChatMessage[],
-): Promise<string> {
-  if (!endpoint) {
-    throw new Error(
-      "Local LLM endpoint is not configured. Set it in extension preferences.",
-    );
-  }
-  if (!model) {
-    throw new Error(
-      "Local LLM model name is not configured. Set it in extension preferences.",
-    );
-  }
-
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      response_format: { type: "json_object" },
-      keep_alive: "30m",
-    }),
-  });
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`Local LLM error (${response.status}): ${body}`);
-  }
-
-  const data = (await response.json()) as ChatCompletionResponse;
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error("Local LLM returned an empty response.");
-  }
-
-  return content;
 }

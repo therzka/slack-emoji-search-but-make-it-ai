@@ -187,7 +187,8 @@ export function getRankedEmojiMatches(
 
       match.substringHits += 1;
       if (strength === 4) match.exactHits += 1;
-      match.score += 8 - index + strength * 4 + termTokenOverlap * 4;
+      match.score +=
+        Math.max(0, 8 - index) + strength * 4 + termTokenOverlap * 4;
     }
 
     for (const [index, name] of fuseMatches.entries()) {
@@ -206,7 +207,8 @@ export function getRankedEmojiMatches(
 
       match.fuseHits += 1;
       if (strength === 4) match.exactHits += 1;
-      match.score += 3 - index * 0.5 + strength * 3 + termTokenOverlap * 3;
+      match.score +=
+        Math.max(0, 3 - index * 0.5) + strength * 3 + termTokenOverlap * 3;
     }
   }
 

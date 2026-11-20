@@ -1,372 +1,205 @@
 import fs from "fs";
 import path from "path";
-import { askAI, streamAI } from "./ai";
 import Fuse from "fuse.js";
 import {
-  getRankedEmojiMatches,
-  rankEmojiMatches,
-  type EmojiTermMatches,
-} from "./ranking";
+  JEV_CANDIDATE_LIMIT,
+  judgeEmojiRelevance,
+  streamLocalTerms,
+  type LocalModel,
+} from "./ai";
+import { rankEmojiMatches, type EmojiTermMatches } from "./ranking";
 
 export type emojiItem = {
   emojiPath: string;
   keywords: string[];
 };
 
-// --- Module-level cache for emoji data and Fuse index ---
-let cachedDirectoryPath: string | null = null;
-let cachedEmojisData: Record<string, string> = {};
-let cachedAliasesData: Record<string, string[]> = {};
-let cachedFuse: Fuse<FuseSearchable> | null = null;
-
-interface FuseSearchable {
-  canonicalName: string;
-  searchTerm: string;
-}
-
-/** Returns true if the emoji name looks like an animation frame (e.g., big_facepalm_01). */
-function isAnimationFrame(name: string): boolean {
-  return /^big_.+_\d{2,}$/.test(name);
-}
-
-/**
- * Loads emoji data from disk and builds the Fuse index.
- * Results are cached — subsequent calls with the same directory are instant.
- */
-async function loadEmojiData(directoryPath: string): Promise<{
-  emojisData: Record<string, string>;
-  aliasesData: Record<string, string[]>;
-  fuse: Fuse<FuseSearchable>;
-}> {
-  if (cachedDirectoryPath === directoryPath && cachedFuse) {
-    return {
-      emojisData: cachedEmojisData,
-      aliasesData: cachedAliasesData,
-      fuse: cachedFuse,
-    };
-  }
-
-  const emojisPath = path.join(directoryPath, "emojis/emojis.json");
-  const aliasesPath = path.join(directoryPath, "emojis/aliases.json");
-
-  let emojisRaw: string;
-  let aliasesRaw: string;
-  try {
-    [emojisRaw, aliasesRaw] = await Promise.all([
-      fs.promises.readFile(emojisPath, "utf8"),
-      fs.promises.readFile(aliasesPath, "utf8"),
-    ]);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "Unknown error";
-    throw new Error(
-      `Could not read emoji files from "${directoryPath}". Make sure the directory contains emojis/emojis.json and emojis/aliases.json. (${detail})`,
-    );
-  }
-
-  let emojisData: Record<string, string>;
-  let aliasesData: Record<string, string[]>;
-  try {
-    emojisData = JSON.parse(emojisRaw);
-    aliasesData = JSON.parse(aliasesRaw);
-  } catch (error) {
-    throw new Error(
-      "Emoji JSON files are corrupted or invalid. Try re-downloading your emoji collection.",
-    );
-  }
-
-  const fuseSearchList: FuseSearchable[] = [];
-  for (const name of Object.keys(emojisData)) {
-    fuseSearchList.push({
-      canonicalName: name,
-      searchTerm: name.replace(/_/g, " "),
-    });
-    if (aliasesData[name]) {
-      for (const alias of aliasesData[name]) {
-        fuseSearchList.push({
-          canonicalName: name,
-          searchTerm: alias.replace(/_/g, " "),
-        });
-      }
-    }
-  }
-
-  const fuse = new Fuse(fuseSearchList, {
-    keys: ["searchTerm"],
-    threshold: 0.3,
-  });
-
-  cachedDirectoryPath = directoryPath;
-  cachedEmojisData = emojisData;
-  cachedAliasesData = aliasesData;
-  cachedFuse = fuse;
-
-  return { emojisData, aliasesData, fuse };
-}
-
-/** Clears the module-level emoji data cache, forcing a reload on the next search. */
-export function clearEmojiCache(): void {
-  cachedDirectoryPath = null;
-  cachedEmojisData = {};
-  cachedAliasesData = {};
-  cachedFuse = null;
-}
-
-const EXTRACTION_SYSTEM_PROMPT = `Find emojis in a Slack custom emoji collection. Given a phrase, output 10-15 plausible emoji name fragments as a JSON array.
-
-Think about: reactions (facepalm, slow-clap, this-is-fine), emotions (love, mind-blown), objects (taco, rocket), memes/characters (picard, doge, elmo), compound names (mic-drop, chef-kiss), and slang equivalents ("throw out"→yeet, "agree"→this, "drunk"→wasted).
-
-Rules: prefer reaction concepts over person names; translate idioms to their cultural emoji equivalent; think about what someone would name the emoji, not just the literal words.
-
-Examples:
-"are you kidding me?" → ["facepalm", "really", "bruh", "eye-roll", "picard", "seriously", "disbelief"]
-"ship it" → ["ship", "rocket", "deploy", "shipit", "lgtm", "launch"]
-
-Return ONLY a valid JSON array, no other text.`;
-
-/**
- * Extracts a JSON array from a raw LLM response, tolerating common local model quirks:
- * - Qwen3 <think>...</think> reasoning blocks
- * - Markdown code fences (```json ... ```)
- * - Extra prose before or after the array
- */
-function extractJsonArray(raw: string): unknown[] {
-  // Strip <think>...</think> blocks (Qwen3 thinking mode)
-  let cleaned = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
-  // Strip markdown code fences
-  cleaned = cleaned
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```\s*$/, "")
-    .trim();
-
-  try {
-    const parsed = JSON.parse(cleaned);
-    if (Array.isArray(parsed)) return parsed;
-  } catch {
-    // fall through to regex extraction
-  }
-
-  // Extract the first [...] block and try parsing that
-  const match = cleaned.match(/\[[\s\S]*?\]/);
-  if (match) {
-    const parsed = JSON.parse(match[0]);
-    if (Array.isArray(parsed)) return parsed;
-  }
-
-  throw new Error("No JSON array found in LLM response");
-}
-
-/**
- * Uses AI to generate plausible emoji name candidates for a user query.
- */
-async function extractSearchTerms(query: string): Promise<string[]> {
-  const fallback = query.split(/\s+/).filter((w) => w.length > 2);
-
-  try {
-    const aiResponse = await askAI(query, EXTRACTION_SYSTEM_PROMPT);
-    console.log("[search] AI raw response:", aiResponse.trim());
-
-    const candidates = extractJsonArray(aiResponse);
-    console.log("[search] AI candidates:", candidates);
-    return candidates as string[];
-  } catch (error) {
-    console.error("[search] AI extraction failed, using fallback:", error);
-    console.log("[search] Fallback terms:", fallback);
-    return fallback;
-  }
-}
-
-/**
- * Finds emoji names that contain the given term as a substring.
- */
-function substringMatchEmojis(
-  term: string,
-  emojiNames: string[],
-  limit: number,
-): string[] {
-  const lower = term.toLowerCase();
-  const matches: string[] = [];
-  for (const name of emojiNames) {
-    if (name.toLowerCase().includes(lower)) {
-      matches.push(name);
-      if (matches.length >= limit) break;
-    }
-  }
-  return matches;
-}
-/**
- * Searches the emoji directory using an AI pipeline:
- * 1. AI generates plausible emoji name candidates for the query
- * 2. Each term produces substring and fuzzy candidates
- * 3. Candidates are ranked globally across all terms
- */
-export const readEmojiDirectory = async (
-  directoryPath: string,
-  aiSearchTerm: string,
-  ignoreList: string[] = [],
-): Promise<emojiItem[]> => {
-  if (aiSearchTerm.trim() === "") return [];
-
-  const { emojisData, aliasesData, fuse } = await loadEmojiData(directoryPath);
-  const allEmojiNames = Object.keys(emojisData);
-
-  // AI-generated emoji name candidates
-  const candidates = await extractSearchTerms(aiSearchTerm);
-
-  // Prepend literal query words so exact/acronym matches always appear
-  const queryWords = aiSearchTerm
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((w) => w.length > 1);
-  const allTerms = [
-    ...queryWords,
-    ...candidates.filter((c) => !queryWords.includes(c.toLowerCase())),
-  ];
-
-  console.log("[search] Query:", JSON.stringify(aiSearchTerm));
-  console.log("[search] Search terms:", allTerms);
-
-  const termMatches: EmojiTermMatches[] = [];
-
-  // Search all candidates with substring + Fuse
-  for (const term of allTerms) {
-    const substrMatches = substringMatchEmojis(term, allEmojiNames, 5);
-    const fuseResults = fuse.search(term, { limit: 5 });
-    const fuseNames = fuseResults.map((r) => r.item.canonicalName);
-
-    termMatches.push({
-      term,
-      substringMatches: substrMatches.filter((name) => !isAnimationFrame(name)),
-      fuseMatches: fuseNames.filter((name) => !isAnimationFrame(name)),
-    });
-
-    console.log(
-      `[search] Term "${term}": ${substrMatches.length} substring, ${fuseNames.length} fuse`,
-    );
-    if (substrMatches.length > 0)
-      console.log(
-        `[search]   substring: ${substrMatches.slice(0, 10).join(", ")}${substrMatches.length > 10 ? "..." : ""}`,
-      );
-    if (fuseNames.length > 0)
-      console.log(
-        `[search]   fuse: ${fuseNames.slice(0, 10).join(", ")}${fuseNames.length > 10 ? "..." : ""}`,
-      );
-  }
-
-  const rankedMatches = getRankedEmojiMatches(termMatches, aiSearchTerm);
-  console.log("[search] Top ranked matches:");
-  for (const match of rankedMatches.slice(0, 10)) {
-    console.log(
-      `[search]   ${match.name} score=${match.score.toFixed(1)} context=${match.queryContextHits} terms=${match.matchedTermsCount} substring=${match.substringHits} fuse=${match.fuseHits}`,
-    );
-  }
-
-  const finalNames = rankEmojiMatches(termMatches, {
-    query: aiSearchTerm,
-    limit: 20,
-    ignoreList,
-  }).filter((name) => name in emojisData);
-
-  console.log(`[search] Final: ${finalNames.length} emojis returned`);
-  console.log(
-    `[search]   ${finalNames.slice(0, 15).join(", ")}${finalNames.length > 15 ? "..." : ""}`,
-  );
-
-  return finalNames.map((name) => ({
-    emojiPath: path.join(directoryPath, "emojis", emojisData[name]),
-    keywords: [name, ...(aliasesData[name] ?? [])],
-  }));
+type EmojiData = {
+  emojis: Record<string, string>;
+  aliases: Record<string, string[]>;
+  names: { name: string; term: string }[];
+  fuse: Fuse<{ name: string; term: string }>;
 };
 
-/**
- * Streaming variant of the emoji search pipeline.
- * Calls `onUpdate` progressively as each AI-generated term is received and searched,
- * so results appear in the UI before the AI finishes generating all candidates.
- * Falls back to the non-streaming pipeline on error.
- */
-export async function searchEmojisStream(
-  directoryPath: string,
-  aiSearchTerm: string,
-  ignoreList: string[] = [],
+let cache: { directory: string; data: EmojiData } | undefined;
+
+const normalize = (text: string) =>
+  text
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/[^\p{L}\p{N}\s]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+async function loadEmojiData(directory: string): Promise<EmojiData> {
+  if (cache?.directory === directory) return cache.data;
+
+  const [emojisRaw, aliasesRaw] = await Promise.all([
+    fs.promises.readFile(path.join(directory, "emojis/emojis.json"), "utf8"),
+    fs.promises.readFile(path.join(directory, "emojis/aliases.json"), "utf8"),
+  ]).catch((error: unknown) => {
+    throw new Error(
+      `Could not read emojis/emojis.json and emojis/aliases.json from "${directory}".`,
+      { cause: error },
+    );
+  });
+
+  let emojis: EmojiData["emojis"];
+  let aliases: EmojiData["aliases"];
+  try {
+    emojis = JSON.parse(emojisRaw);
+    aliases = JSON.parse(aliasesRaw);
+  } catch (error) {
+    throw new Error(
+      "Emoji JSON files are invalid. Try re-downloading your emoji collection.",
+      { cause: error },
+    );
+  }
+
+  const names = Object.keys(emojis)
+    .filter((name) => !/^big_.+_\d{2,}$/.test(name))
+    .flatMap((name) =>
+      [name, ...(aliases[name] ?? [])].map((label) => ({
+        name,
+        term: normalize(label),
+      })),
+    )
+    .filter(({ term }) => term);
+
+  const data = {
+    emojis,
+    aliases,
+    names,
+    fuse: new Fuse(names, { keys: ["term"], threshold: 0.3 }),
+  };
+  cache = { directory, data };
+  return data;
+}
+
+export function clearEmojiCache(): void {
+  cache = undefined;
+}
+
+const REACTION_TERMS = [
+  [/\bship it\b/, ["launch", "deploy", "rocket"]],
+  [
+    /\b(lgtm|looks good to me|i agree)\b/,
+    ["approved", "thumbs up", "check mark"],
+  ],
+  [
+    /\b(are you kidding|pointless meeting|hate meetings)\b/,
+    ["facepalm", "eye roll", "bruh"],
+  ],
+  [/\b(celebrat\w*|congrats|we did it)\b/, ["party", "tada", "confetti"]],
+  [/\b(holy moly|wow|mind blown)\b/, ["surprised", "mind blown", "shocked"]],
+] as const;
+const STOP_WORDS = new Set(
+  "a am an and are as at be for from how i in is it me my of on or that the this to was we with you".split(
+    " ",
+  ),
+);
+const LOCAL_RESULT_LIMIT = 20;
+
+type SearchOptions = {
+  ignoreList?: string[];
+  signal?: AbortSignal;
+} & (
+  | { mode: "jev"; apiKey: string; judge?: typeof judgeEmojiRelevance }
+  | { mode: "local"; model?: LocalModel }
+);
+
+export async function searchEmojis(
+  directory: string,
+  query: string,
+  options: SearchOptions,
   onUpdate: (emojis: emojiItem[]) => void,
 ): Promise<void> {
-  if (aiSearchTerm.trim() === "") return;
-
-  const t0 = Date.now();
-  console.log(`[search:stream] START query="${aiSearchTerm}"`);
-
-  const { emojisData, aliasesData, fuse } = await loadEmojiData(directoryPath);
-  const allEmojiNames = Object.keys(emojisData);
-  console.log(
-    `[search:stream] emoji data loaded (${Date.now() - t0}ms) emojis=${allEmojiNames.length}`,
-  );
+  if (!query.trim()) return;
+  const signal = options.signal ?? new AbortController().signal;
+  const data = await loadEmojiData(directory);
+  signal.throwIfAborted();
+  const normalized = normalize(query);
   const termMatches: EmojiTermMatches[] = [];
+  const seen = new Set<string>();
+  const matchLimit = options.mode === "jev" ? JEV_CANDIDATE_LIMIT : 5;
 
-  const processTerm = (term: string) => {
-    const substrMatches = substringMatchEmojis(term, allEmojiNames, 5);
-    const fuseResults = fuse.search(term, { limit: 5 });
-    const fuseNames = fuseResults.map((r) => r.item.canonicalName);
+  const addTerm = (value: string) => {
+    const term = normalize(value);
+    if (!term || seen.has(term)) return;
+    seen.add(term);
 
+    const substringMatches = new Set<string>();
+    for (const { name, term: label } of data.names) {
+      if (label === term) substringMatches.add(name);
+    }
+    for (const { name, term: label } of data.names) {
+      if (substringMatches.size >= matchLimit) break;
+      if (label.includes(term)) substringMatches.add(name);
+    }
+    const fuseMatches = [
+      ...new Set(
+        data.fuse
+          .search(term, { limit: matchLimit * 2 })
+          .map(({ item }) => item.name),
+      ),
+    ].slice(0, matchLimit);
     termMatches.push({
       term,
-      substringMatches: substrMatches.filter((name) => !isAnimationFrame(name)),
-      fuseMatches: fuseNames.filter((name) => !isAnimationFrame(name)),
+      substringMatches: [...substringMatches].slice(0, matchLimit),
+      fuseMatches,
     });
+  };
 
-    console.log(
-      `[search:stream] term "${term}": ${substrMatches.length} substring, ${fuseNames.length} fuse (${Date.now() - t0}ms)`,
-    );
+  addTerm(normalized);
+  for (const word of normalized.split(" ").slice(0, 20)) {
+    if (word.length > 1 && !STOP_WORDS.has(word)) addTerm(word);
+  }
+  for (const [pattern, terms] of REACTION_TERMS) {
+    if (pattern.test(normalized)) terms.forEach(addTerm);
+  }
 
-    const finalNames = rankEmojiMatches(termMatches, {
-      query: aiSearchTerm,
-      limit: 20,
-      ignoreList,
-    }).filter((name) => name in emojisData);
-
-    console.log(
-      `[search:stream] ranked ${finalNames.length} results after ${termMatches.length} terms`,
-    );
-
+  const shortlist = () =>
+    rankEmojiMatches(termMatches, {
+      query,
+      limit: options.mode === "jev" ? JEV_CANDIDATE_LIMIT : LOCAL_RESULT_LIMIT,
+      ignoreList: options.ignoreList,
+    });
+  const publish = (names: string[]) => {
+    signal.throwIfAborted();
     onUpdate(
-      finalNames.map((name) => ({
-        emojiPath: path.join(directoryPath, "emojis", emojisData[name]),
-        keywords: [name, ...(aliasesData[name] ?? [])],
+      names.map((name) => ({
+        emojiPath: path.join(directory, "emojis", data.emojis[name]),
+        keywords: [name, ...(data.aliases[name] ?? [])],
       })),
     );
   };
 
-  try {
-    // Always search the literal query first — essential for acronyms and exact names
-    const queryWords = aiSearchTerm
-      .toLowerCase()
-      .split(/\s+/)
-      .filter((w) => w.length > 1);
-    for (const word of queryWords) {
-      processTerm(word);
-    }
+  if (options.mode === "jev") {
+    const candidates = shortlist().map((name) => ({
+      name,
+      aliases: data.aliases[name] ?? [],
+    }));
+    publish(
+      candidates.length
+        ? await (options.judge ?? judgeEmojiRelevance)(query, candidates, {
+            apiKey: options.apiKey,
+            signal,
+          })
+        : [],
+    );
+    return;
+  }
 
-    console.log(`[search:stream] starting AI stream... (${Date.now() - t0}ms)`);
-    await streamAI(aiSearchTerm, EXTRACTION_SYSTEM_PROMPT, (term) => {
-      // Skip AI terms we already searched as literal words
-      if (!queryWords.includes(term)) {
-        processTerm(term);
-      }
-    });
-    console.log(
-      `[search:stream] DONE total=${Date.now() - t0}ms terms=${termMatches.length}`,
+  publish(shortlist());
+  if (options.model) {
+    await streamLocalTerms(
+      query,
+      options.model,
+      (term) => {
+        addTerm(term);
+        publish(shortlist());
+      },
+      signal,
     );
-  } catch (error) {
-    console.error(
-      `[search:stream] streaming failed (${Date.now() - t0}ms), falling back:`,
-      error,
-    );
-    const emojis = await readEmojiDirectory(
-      directoryPath,
-      aiSearchTerm,
-      ignoreList,
-    );
-    console.log(
-      `[search:stream] fallback returned ${emojis.length} results (${Date.now() - t0}ms)`,
-    );
-    onUpdate(emojis);
   }
 }

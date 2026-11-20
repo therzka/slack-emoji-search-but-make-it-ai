@@ -27,19 +27,25 @@
         {
           "name": "aiProvider",
           "title": "AI Provider",
-          "description": "Choose between GitHub Models (cloud) or a local LLM server (e.g. Ollama, LM Studio)",
+          "description": "Search locally or opt in to TypeSafe Jev cloud relevance checks",
           "required": false,
           "type": "dropdown",
-          "default": "github",
+          "default": "local",
           "data": [
-            { "title": "GitHub Models", "value": "github" },
-            { "title": "Local LLM", "value": "local" }
+            {
+              "title": "Local Search (Optional Local LLM)",
+              "value": "local"
+            },
+            {
+              "title": "TypeSafe Jev (Cloud)",
+              "value": "jev"
+            }
           ]
         },
         {
-          "name": "githubToken",
-          "title": "GitHub Personal Access Token",
-          "description": "PAT with models:read scope for AI-powered search via GitHub Models (not needed for Local LLM)",
+          "name": "typesafeApiKey",
+          "title": "TypeSafe API Key",
+          "description": "Required only for TypeSafe Jev. Jev receives your query and shortlisted emoji names and aliases.",
           "required": false,
           "type": "password"
         },
@@ -50,21 +56,6 @@
           "required": false,
           "type": "textfield",
           "default": ""
-        },
-        {
-          "name": "aiModel",
-          "title": "AI Model (GitHub Models)",
-          "description": "GitHub Models model to use for emoji candidate generation",
-          "required": false,
-          "type": "dropdown",
-          "default": "openai/gpt-5-mini",
-          "data": [
-            { "title": "GPT-5 mini — Fast (default)", "value": "openai/gpt-5-mini" },
-            { "title": "GPT-4.1 — More accurate", "value": "openai/gpt-4.1" },
-            { "title": "GPT-4.1 mini — Balanced", "value": "openai/gpt-4.1-mini" },
-            { "title": "GPT-4o — Strong general purpose", "value": "openai/gpt-4o" },
-            { "title": "GPT-4o mini — Fast GPT-4o", "value": "openai/gpt-4o-mini" }
-          ]
         },
         {
           "name": "localEndpoint",
